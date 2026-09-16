@@ -664,8 +664,19 @@ def logs_tail(n, prio):
     return _run(["journalctl", "-u", "llama-server", "-n", str(n),
                  "-p", prio, "--no-pager", "-q"], timeout=10)
 
+def _spec_counters():
+    """读投机解码累计计数器（快速测试前后差值用）。"""
+    text = _get(LLAMA + "/metrics")
+    if text is None:
+        return None
+    s, _ = parse_prom(text)
+    return {"drafts": s.get("llamacpp:spec_decode_num_drafts_total", 0),
+            "draft_tokens": s.get("llamacpp:spec_decode_num_draft_tokens_total", 0),
+            "accepted": s.get("llamacpp:spec_decode_num_accepted_tokens_total", 0)}
+
 def test_generation(prompt, n_predict):
     n_predict = max(1, min(1024, int(n_predict)))
+    before = _spec_counters()
     body = json.dumps({"prompt": prompt, "n_predict": n_predict,
                        "stream": False}).encode()
     req = urllib.request.Request(LLAMA + "/completion", data=body,
@@ -676,6 +687,15 @@ def test_generation(prompt, n_predict):
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
     t = j.get("timings", {})  # /completion 的计时数据嵌套在 timings 下
+    after = _spec_counters()
+    mtp = None
+    if before and after:
+        dd = after["draft_tokens"] - before["draft_tokens"]
+        da = after["accepted"] - before["accepted"]
+        if dd > 0:
+            mtp = {"draft_tokens": dd, "accepted": da,
+                   "accept": round(100.0 * da / dd, 1),
+                   "drafts": after["drafts"] - before["drafts"]}
     return {"ok": True,
             "content": j.get("content", ""),
             "timing": {
@@ -683,7 +703,8 @@ def test_generation(prompt, n_predict):
                 "predicted_n": t.get("predicted_n"), "predicted_ms": t.get("predicted_ms"),
                 "predicted_per_second": t.get("predicted_per_second"),
                 "draft_n": t.get("draft_n"),
-            }}
+            },
+            "mtp": mtp}
 
 # ---------------- 启动参数（systemd 单元 + 历史） ----------------
 

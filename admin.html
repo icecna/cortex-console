@@ -203,6 +203,7 @@
             <option value="warning">warning 及以上</option>
             <option value="err">仅错误</option>
           </select>
+          <input class="inp" id="log_filter" style="width:130px" placeholder="过滤关键词…" title="按关键词过滤日志行（不区分大小写）">
           <label class="chk"><input type="checkbox" id="log_follow" checked> 跟随</label>
           <button class="btn" id="btn_log_refresh">刷新</button>
           <button class="btn" id="btn_log_clear">清空</button>
@@ -590,10 +591,14 @@ $("btn_test").onclick = async () => {
       prompt: $("test_prompt").value, n_predict: +$("test_max").value || 64 });
     if (!j.ok) { $("test_status").textContent = j.error; $("test_status").className = "msg bad"; return; }
     const wall = (Date.now() - t0) / 1000;
+    let mtpStr = "";
+    if (j.mtp && j.mtp.draft_tokens > 0) {
+      mtpStr = " · MTP 接受率 " + j.mtp.accept + "%（" + j.mtp.accepted + "/" + j.mtp.draft_tokens + "）";
+    }
     $("test_status").textContent =
       "完成 · " + (j.timing.predicted_n || 0) + " tok · " +
       (j.timing.predicted_per_second ? j.timing.predicted_per_second.toFixed(1) : "—") +
-      " t/s（服务端计时）· 端到端 " + wall.toFixed(1) + " s";
+      " t/s（服务端计时）· 端到端 " + wall.toFixed(1) + " s" + mtpStr;
     $("test_status").className = "msg ok";
     $("test_out").textContent = j.content || "";
   } catch (e) { $("test_status").textContent = e.message; $("test_status").className = "msg bad"; }
@@ -601,7 +606,11 @@ $("btn_test").onclick = async () => {
 
 /* ---------- 日志 ---------- */
 const MAXLINES = 800;
-function addLine(view, line, max) {
+function addLine(view, line, max, filter) {
+  if (filter) {
+    const f = filter.toLowerCase();
+    if (f && !line.toLowerCase().includes(f)) return;
+  }
   const d = document.createElement("div");
   d.className = "ll" + (/\.\d{3} E /.test(line) ? " bad" : /\.\d{3} W /.test(line) ? " warn" : "");
   d.textContent = line;
@@ -613,8 +622,9 @@ function loadTail() {
   const prio = $("log_prio").value;
   api("/api/admin/logs?n=100&prio=" + prio).then(j => {
     const v = $("log_view");
+    const f = $("log_filter").value.trim();
     v.innerHTML = "";
-    (j.lines || []).forEach(l => addLine(v, l, MAXLINES));
+    (j.lines || []).forEach(l => addLine(v, l, MAXLINES, f));
     v.scrollTop = v.scrollHeight;
   }).catch(() => {});
 }
@@ -628,12 +638,17 @@ function openStream() {
   es.onmessage = e => {
     const v = $("log_view");
     const pin = v.scrollHeight - v.scrollTop - v.clientHeight < 40;
-    addLine(v, e.data, MAXLINES);
+    addLine(v, e.data, MAXLINES, $("log_filter").value.trim());
     if (pin) v.scrollTop = v.scrollHeight;
   };
   es.onerror = () => { $("log_state").textContent = "（连接断开，自动重连中…）"; };
 }
 
+let filterTimer = null;
+$("log_filter").oninput = () => {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(loadTail, 300);
+};
 $("log_follow").onchange = openStream;
 $("log_prio").onchange = () => { loadTail(); openStream(); };
 $("btn_log_refresh").onclick = loadTail;
