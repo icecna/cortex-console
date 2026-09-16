@@ -66,6 +66,7 @@
             <label class="flab" title="主模型文件路径（.gguf）">-m 模型</label>
             <input class="inp grow" id="f_model" readonly title="点击右侧按钮选择">
             <button class="btn" onclick="openFileBrowser('f_model')">选择</button>
+            <button class="btn" onclick="clearFile('f_model')">清空</button>
           </div>
         </div>
         <div class="fgroup">
@@ -74,6 +75,7 @@
             <label class="flab" title="多模态投影器文件（视觉编码器）">--mmproj 投影器</label>
             <input class="inp grow" id="f_mmproj" readonly>
             <button class="btn" onclick="openFileBrowser('f_mmproj')">选择</button>
+            <button class="btn" onclick="clearFile('f_mmproj')">清空</button>
           </div>
           <div class="frow chkrow">
             <label class="chk" title="多模态投影器不卸载到 GPU"><input type="checkbox" id="f_nommo"> --no-mmproj-offload</label>
@@ -85,6 +87,7 @@
             <label class="flab" title="投机解码草稿模型文件">--spec-draft 草稿模型</label>
             <input class="inp grow" id="f_draft" readonly>
             <button class="btn" onclick="openFileBrowser('f_draft')">选择</button>
+            <button class="btn" onclick="clearFile('f_draft')">清空</button>
           </div>
           <div class="fgrid">
             <div class="fcell"><label class="flab" title="投机解码类型">--spec-type</label>
@@ -542,6 +545,11 @@ $("btn_cmd_save_restart").onclick = () => saveCmd(true);
 CHK_IDS.forEach(([id]) => $(id).addEventListener("change", updatePreview));
 
 /* ---------- 文件选择弹窗 ---------- */
+function clearFile(id) {
+  $(id).value = "";
+  updatePreview();
+}
+
 let fmTarget = null;
 function openFileBrowser(target, initial) {
   fmTarget = target;

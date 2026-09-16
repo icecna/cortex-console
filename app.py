@@ -860,10 +860,30 @@ def list_files(path):
         parent = None
     return {"path": p, "parent": parent, "dirs": dirs, "files": files}
 
+def _check_cmd_files(cmd):
+    """保存前校验命令引用的模型文件是否存在于磁盘。"""
+    p = parse_cmd(cmd)
+    checks = [
+        (p.get("model"), "模型文件 (-m)"),
+        (p.get("mmproj"), "多模态投影器文件 (--mmproj)"),
+        (p.get("draft"), "草稿模型文件 (--spec-draft)"),
+    ]
+    for path, name in checks:
+        if not path:
+            if name.startswith("模型文件"):
+                return "缺少" + name
+            continue
+        if not os.path.isfile(path):
+            return name + " 不存在: " + path
+    return None
+
 def cmd_save(new_cmd, restart=False):
     new_cmd = " ".join(new_cmd.split())
     if not new_cmd or "llama-server" not in new_cmd:
         return {"ok": False, "error": "命令为空或不含 llama-server"}
+    err = _check_cmd_files(new_cmd)
+    if err:
+        return {"ok": False, "error": err}
     cur = _read_unit_cmd()
     if cur == new_cmd:
         return {"ok": True, "changed": False, "error": None, "state": None}
