@@ -45,6 +45,10 @@
           <div class="def"><span class="k">PID</span><span class="v big" id="svc_pid">—</span></div>
           <div class="def"><span class="k">启动时间</span><span class="v" id="svc_started">—</span></div>
           <div class="def"><span class="k">模型睡眠</span><span class="v" id="svc_sleep">—</span></div>
+          <div class="def"><span class="k">进程 CPU</span><span class="v" id="h_cpu">—</span></div>
+          <div class="def"><span class="k">进程内存</span><span class="v" id="h_rss">—</span></div>
+          <div class="def"><span class="k">进程运行</span><span class="v" id="h_up">—</span></div>
+          <div class="def"><span class="k">API 响应</span><span class="v" id="h_api">—</span></div>
         </div>
         <div class="btnrow">
           <button class="btn primary" id="btn_start">启动</button>
@@ -260,6 +264,7 @@ function showMain() {
   $("login_box").style.display = "none";
   $("admin_main").style.display = "";
   refreshService();
+  refreshHealth();
   loadCmd();
   loadTail();
   openStream();
@@ -317,6 +322,26 @@ async function doAction(action, label) {
 $("btn_start").onclick = () => doAction("start", "启动");
 $("btn_restart").onclick = () => doAction("restart", "重启");
 $("btn_stop").onclick = () => doAction("stop", "停止");
+
+/* ---------- 服务健康 ---------- */
+function fmtUptime(s) {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (d) return d + " 天 " + h + " 时";
+  if (h) return h + " 时 " + m + " 分";
+  return m + " 分";
+}
+async function refreshHealth() {
+  if (!token) return;
+  try {
+    const j = await api("/api/admin/health");
+    const p = j.proc;
+    $("h_cpu").textContent = p ? p.cpu + "%" : "—";
+    $("h_rss").textContent = p ? (p.rss_mb / 1024).toFixed(1) + " GB" : "—";
+    $("h_up").textContent = p ? fmtUptime(p.uptime) : "—";
+    $("h_api").textContent = j.api.ok ? "ok · " + j.api.ms + " ms" : "无响应";
+    $("h_api").className = "v " + (j.api.ok ? "ok" : "bad");
+  } catch (e) {}
+}
 
 /* ---------- 启动参数（结构化表单） ---------- */
 let cmdHist = [], cmdBinary = "", cmdCurrent = "";
@@ -652,6 +677,7 @@ $("btn_pw").onclick = async () => {
 };
 
 setInterval(refreshService, 5000);
+setInterval(refreshHealth, 5000);
 setInterval(refreshErrors, 15000);
 
 /* ---------- 初始化 ---------- */

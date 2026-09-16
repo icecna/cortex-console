@@ -19,6 +19,7 @@ import secrets
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -613,6 +614,49 @@ def service_action(action):
             "error": r.stderr.strip() or None,
             "state": info}
 
+def proc_health(pid):
+    """从 /proc 读进程 CPU 占用（0.5s 采样）、内存、运行时长。"""
+    try:
+        hz = os.sysconf("SC_CLK_TCK")
+        def read_stat():
+            with open("/proc/%d/stat" % pid) as f:
+                s = f.read()
+            rest = s[s.rfind(")") + 2:].split()
+            return int(rest[11]) + int(rest[12]), int(rest[19])  # utime+stime, starttime
+        t1, starttime = read_stat()
+        time.sleep(0.5)
+        t2, _ = read_stat()
+        cpu = (t2 - t1) / hz / 0.5 * 100
+        rss_kb = 0
+        with open("/proc/%d/status" % pid) as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss_kb = int(line.split()[1])
+        with open("/proc/uptime") as f:
+            up_now = float(f.read().split()[0])
+        return {"cpu": round(cpu, 1), "rss_mb": rss_kb // 1024,
+                "uptime": max(0.0, up_now - starttime / hz)}
+    except (OSError, ValueError, IndexError):
+        return None
+
+def probe_llama():
+    """探测 llama-server API 响应状态与延迟（有 HTTP 响应即视为存活）。"""
+    t0 = time.time()
+    for path in ("/health", "/"):
+        try:
+            with urllib.request.urlopen(LLAMA + path, timeout=3) as r:
+                return {"ok": True, "ms": int((time.time() - t0) * 1000), "code": r.status}
+        except urllib.error.HTTPError:
+            continue  # 服务有响应但该端点不存在，换下一个
+        except Exception:
+            break
+    return {"ok": False, "ms": None}
+
+def health_info():
+    svc = service_info()
+    return {"proc": proc_health(svc["pid"]) if svc.get("pid") else None,
+            "api": probe_llama()}
+
 def logs_tail(n, prio):
     if prio not in ("info", "warning", "err"):
         prio = "info"
@@ -892,6 +936,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "未登录"})
                 return
             self._json(200, service_info())
+            return
+        if path == "/api/admin/health":
+            if not self._admin_token():
+                self._json(401, {"error": "未登录"})
+                return
+            self._json(200, health_info())
             return
         if path == "/api/admin/cmd":
             if not self._admin_token():
