@@ -61,25 +61,57 @@
       <section class="section">
         <h2><span class="sico">⚙️</span>启动参数</h2>
         <div class="fgroup">
-          <h3>模型文件</h3>
+          <h3>模型</h3>
           <div class="frow">
             <label class="flab" title="主模型文件路径（.gguf）">-m 模型</label>
             <input class="inp grow" id="f_model" readonly title="点击右侧按钮选择">
             <button class="btn" onclick="openFileBrowser('f_model')">选择</button>
           </div>
+        </div>
+        <div class="fgroup">
+          <h3>视觉 · 多模态</h3>
           <div class="frow">
-            <label class="flab" title="多模态投影器文件（视觉编码器）">--mmproj 多模态</label>
+            <label class="flab" title="多模态投影器文件（视觉编码器）">--mmproj 投影器</label>
             <input class="inp grow" id="f_mmproj" readonly>
             <button class="btn" onclick="openFileBrowser('f_mmproj')">选择</button>
           </div>
-          <div class="frow">
-            <label class="flab" title="投机解码草稿模型文件">--spec-draft 草稿</label>
-            <input class="inp grow" id="f_draft" readonly>
-            <button class="btn" onclick="openFileBrowser('f_draft')">选择</button>
+          <div class="frow chkrow">
+            <label class="chk" title="多模态投影器不卸载到 GPU"><input type="checkbox" id="f_nommo"> --no-mmproj-offload</label>
           </div>
         </div>
         <div class="fgroup">
-          <h3>性能参数</h3>
+          <h3>MTP · 投机解码</h3>
+          <div class="frow">
+            <label class="flab" title="投机解码草稿模型文件">--spec-draft 草稿模型</label>
+            <input class="inp grow" id="f_draft" readonly>
+            <button class="btn" onclick="openFileBrowser('f_draft')">选择</button>
+          </div>
+          <div class="fgrid">
+            <div class="fcell"><label class="flab" title="投机解码类型">--spec-type</label>
+              <select class="inp grow sel" id="f_spectype">
+                <option value="">不设置</option><option value="draft-mtp">draft-mtp</option><option value="draft-simple">draft-simple</option><option value="draft-eagle3">draft-eagle3</option><option value="draft-dflash">draft-dflash</option><option value="draft-dspark">draft-dspark</option><option value="ngram-simple">ngram-simple</option><option value="ngram-map-k">ngram-map-k</option><option value="ngram-map-k4v">ngram-map-k4v</option><option value="ngram-mod">ngram-mod</option><option value="ngram-cache">ngram-cache</option><option value="none">none</option>
+              </select>
+            </div>
+            <div class="fcell"><label class="flab" title="MTP 投机解码最大草稿步数">--spec-draft-n-max</label><input class="inp grow" id="f_dmax" type="number"></div>
+          </div>
+        </div>
+        <div class="fgroup">
+          <h3>采样与推理</h3>
+          <div class="fgrid">
+            <div class="fcell"><label class="flab" title="采样温度（越低越确定）">--temp</label><input class="inp grow" id="f_temp" type="number" step="0.05"></div>
+            <div class="fcell"><label class="flab" title="Top-K 采样：只保留概率最高的 K 个 token">--top-k</label><input class="inp grow" id="f_topk" type="number"></div>
+            <div class="fcell"><label class="flab" title="Top-P 采样：累积概率阈值">--top-p</label><input class="inp grow" id="f_topp" type="number" step="0.01"></div>
+            <div class="fcell"><label class="flab" title="最小概率：保留概率 ≥ min-p × 最高概率的 token">--min-p</label><input class="inp grow" id="f_minp" type="number" step="0.01"></div>
+            <div class="fcell"><label class="flab" title="推理（思考）模式">--reasoning</label>
+              <select class="inp grow sel" id="f_reasoning">
+                <option value="">不设置</option><option value="auto">auto</option><option value="on">on</option><option value="off">off</option>
+              </select>
+            </div>
+            <div class="fcell span2"><label class="flab" title="chat 模板参数（JSON，含空格时自动加引号）">--chat-template-kwargs</label><input class="inp grow" id="f_kwargs" placeholder='{"reasoning_effort":"medium"}'></div>
+          </div>
+        </div>
+        <div class="fgroup">
+          <h3>性能与内存</h3>
           <div class="fgrid">
             <div class="fcell"><label class="flab" title="上下文长度（最大 token 数）">-c 上下文</label><input class="inp grow" id="f_c" type="number"></div>
             <div class="fcell"><label class="flab" title="卸载到 GPU 的层数（99 = 全部）">-ngl 卸载层</label><input class="inp grow" id="f_ngl" type="number"></div>
@@ -87,26 +119,9 @@
             <div class="fcell"><label class="flab" title="并行请求槽位数">-np 槽位</label><input class="inp grow" id="f_np" type="number"></div>
             <div class="fcell"><label class="flab" title="批处理大小">-b 批</label><input class="inp grow" id="f_b" type="number"></div>
             <div class="fcell"><label class="flab" title="微批大小">-ub 微批</label><input class="inp grow" id="f_ub" type="number"></div>
-            <div class="fcell"><label class="flab" title="服务监听端口">--port 端口</label><input class="inp grow" id="f_port" type="number"></div>
-            <div class="fcell"><label class="flab" title="MTP 投机解码最大草稿步数">--spec-draft-n-max</label><input class="inp grow" id="f_dmax" type="number"></div>
-            <div class="fcell"><label class="flab" title="KV 缓存保留在内存中的比例（0-100）">--cache-ram</label><input class="inp grow" id="f_cram" type="number"></div>
-            <div class="fcell"><label class="flab" title="采样温度（越低越确定）">--temp</label><input class="inp grow" id="f_temp" type="number" step="0.05"></div>
-            <div class="fcell"><label class="flab" title="Top-K 采样：只保留概率最高的 K 个 token">--top-k</label><input class="inp grow" id="f_topk" type="number"></div>
-            <div class="fcell"><label class="flab" title="Top-P 采样：累积概率阈值">--top-p</label><input class="inp grow" id="f_topp" type="number" step="0.01"></div>
-            <div class="fcell"><label class="flab" title="最小概率：保留概率 ≥ min-p × 最高概率的 token">--min-p</label><input class="inp grow" id="f_minp" type="number" step="0.01"></div>
-          </div>
-        </div>
-        <div class="fgroup">
-          <h3>高级选项</h3>
-          <div class="fgrid">
             <div class="fcell"><label class="flab" title="Flash Attention 开关">-fa 注意力</label>
               <select class="inp grow sel" id="f_fa">
                 <option value="">不设置</option><option value="on">on</option><option value="off">off</option><option value="auto">auto</option>
-              </select>
-            </div>
-            <div class="fcell"><label class="flab" title="多 GPU 切分模式">--split-mode</label>
-              <select class="inp grow sel" id="f_split">
-                <option value="">不设置</option><option value="tensor">tensor</option><option value="layer">layer</option><option value="row">row</option><option value="none">none</option>
               </select>
             </div>
             <div class="fcell"><label class="flab" title="K 缓存量化类型">-ctk KV-K</label>
@@ -119,39 +134,36 @@
                 <option value="">不设置</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option><option value="iq4_nl">iq4_nl</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="f32">f32</option>
               </select>
             </div>
+            <div class="fcell"><label class="flab" title="KV 缓存保留在内存中的比例（0-100）">--cache-ram</label><input class="inp grow" id="f_cram" type="number"></div>
             <div class="fcell"><label class="flab" title="模型加载方式">--load-mode</label>
               <select class="inp grow sel" id="f_load">
                 <option value="">不设置</option><option value="auto">auto</option><option value="none">none</option><option value="mmap">mmap</option><option value="mlock">mlock</option><option value="mmap+mlock">mmap+mlock</option><option value="dio">dio</option>
               </select>
             </div>
-            <div class="fcell"><label class="flab" title="投机解码类型">--spec-type</label>
-              <select class="inp grow sel" id="f_spectype">
-                <option value="">不设置</option><option value="draft-mtp">draft-mtp</option><option value="draft-simple">draft-simple</option><option value="draft-eagle3">draft-eagle3</option><option value="draft-dflash">draft-dflash</option><option value="draft-dspark">draft-dspark</option><option value="ngram-simple">ngram-simple</option><option value="ngram-map-k">ngram-map-k</option><option value="ngram-map-k4v">ngram-map-k4v</option><option value="ngram-mod">ngram-mod</option><option value="ngram-cache">ngram-cache</option><option value="none">none</option>
-              </select>
-            </div>
-            <div class="fcell"><label class="flab" title="推理（思考）模式">--reasoning</label>
-              <select class="inp grow sel" id="f_reasoning">
-                <option value="">不设置</option><option value="auto">auto</option><option value="on">on</option><option value="off">off</option>
-              </select>
-            </div>
           </div>
         </div>
         <div class="fgroup">
-          <h3>开关</h3>
-          <div class="frow chkrow">
-            <label class="chk" title="启用 /metrics 指标端点"><input type="checkbox" id="f_metrics"> --metrics</label>
-            <label class="chk" title="不绑定 host（仅本地访问）"><input type="checkbox" id="f_nohost"> --no-host</label>
-            <label class="chk" title="多模态投影器不卸载到 GPU"><input type="checkbox" id="f_nommo"> --no-mmproj-offload</label>
-          </div>
-        </div>
-        <div class="fgroup">
-          <h3>网络与标识</h3>
+          <h3>多 GPU</h3>
           <div class="fgrid">
-            <div class="fcell"><label class="flab" title="模型别名（/v1/models 中显示）">--alias</label><input class="inp grow" id="f_alias" placeholder="模型别名"></div>
             <div class="fcell"><label class="flab" title="指定使用的 GPU 设备">--device</label><input class="inp grow" id="f_device" placeholder="CUDA0,CUDA1"></div>
+            <div class="fcell"><label class="flab" title="多 GPU 切分模式">--split-mode</label>
+              <select class="inp grow sel" id="f_split">
+                <option value="">不设置</option><option value="tensor">tensor</option><option value="layer">layer</option><option value="row">row</option><option value="none">none</option>
+              </select>
+            </div>
             <div class="fcell"><label class="flab" title="各 GPU 负载分配比例">--tensor-split</label><input class="inp grow" id="f_ts" placeholder="1,1"></div>
+          </div>
+        </div>
+        <div class="fgroup">
+          <h3>网络与其他</h3>
+          <div class="fgrid">
             <div class="fcell"><label class="flab" title="监听地址">--host</label><input class="inp grow" id="f_host" placeholder="0.0.0.0"></div>
-            <div class="fcell span2"><label class="flab" title="chat 模板参数（JSON，含空格时自动加引号）">--chat-template-kwargs</label><input class="inp grow" id="f_kwargs" placeholder='{"reasoning_effort":"medium"}'></div>
+            <div class="fcell"><label class="flab" title="服务监听端口">--port 端口</label><input class="inp grow" id="f_port" type="number"></div>
+            <div class="fcell"><label class="flab" title="模型别名（/v1/models 中显示）">--alias</label><input class="inp grow" id="f_alias" placeholder="模型别名"></div>
+          </div>
+          <div class="frow chkrow">
+            <label class="chk" title="不绑定 host（仅本地访问）"><input type="checkbox" id="f_nohost"> --no-host</label>
+            <label class="chk" title="启用 /metrics 指标端点"><input type="checkbox" id="f_metrics"> --metrics</label>
           </div>
         </div>
         <div class="fgroup">
