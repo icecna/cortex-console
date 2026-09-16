@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模型服务器监控</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/themes.css">
+</head>
+<body class="t-dark">
+<header>
+  <div class="dot" id="dot"></div>
+  <h1 id="model">加载中…</h1>
+  <span class="sub" id="modelsub"></span>
+  <span style="margin-left:auto; display:flex; align-items:center; gap:10px">
+    <a class="link" href="/admin">管理</a>
+    <a class="link" href="/themes">对比主题</a>
+    <select id="theme" title="切换主题">
+      <option value="dark">深色</option>
+      <option value="light">浅色</option>
+      <option value="glass">玻璃</option>
+      <option value="terminal">终端</option>
+      <option value="bento">渐变</option>
+    </select>
+    <span class="sub" id="clock"></span>
+  </span>
+</header>
+
+<!-- ===== 主指标栏 ===== -->
+<section class="kpis">
+  <div class="kpi">
+    <div class="kpi-label">生成速度</div>
+    <div class="kpi-value" id="k_gen">—<span class="u">t/s</span></div>
+    <div class="kpi-sub" id="k_gen_sub"></div>
+    <canvas class="kpi-spark" id="k_gen_c"></canvas>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">MTP 接受率</div>
+    <div class="kpi-value" id="k_mtp">—<span class="u">%</span></div>
+    <div class="kpi-sub" id="k_mtp_sub">实时 —</div>
+    <canvas class="kpi-spark" id="k_mtp_c"></canvas>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">GPU 利用率</div>
+    <div class="kpi-value" id="k_gpu">—<span class="u">%</span></div>
+    <div class="kpi-sub" id="k_gpu_sub"></div>
+    <canvas class="kpi-spark" id="k_gpu_c"></canvas>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">显存</div>
+    <div class="kpi-value" id="k_vram">—<span class="u">GB</span></div>
+    <div class="kpi-sub" id="k_vram_sub"></div>
+    <canvas class="kpi-spark" id="k_vram_c"></canvas>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">CPU</div>
+    <div class="kpi-value" id="k_cpu">—<span class="u">%</span></div>
+    <canvas class="kpi-spark" id="k_cpu_c"></canvas>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">内存</div>
+    <div class="kpi-value" id="k_mem">—<span class="u">GB</span></div>
+    <div class="kpi-sub" id="k_mem_sub"></div>
+    <canvas class="kpi-spark" id="k_mem_c"></canvas>
+  </div>
+</section>
+
+<div class="cols">
+  <!-- ===== llama.cpp 栏 ===== -->
+  <div class="col">
+    <section class="section">
+      <h2>推理服务 · 模型参数</h2>
+      <div class="defs">
+        <div class="def"><span class="k">状态</span><span class="v" id="svc_status">—</span></div>
+        <div class="def"><span class="k">模型</span><span class="v" id="svc_model">—</span></div>
+        <div class="def"><span class="k">量化</span><span class="v" id="svc_ftype">—</span></div>
+        <div class="def"><span class="k">上下文</span><span class="v" id="svc_ctx">—</span></div>
+        <div class="def"><span class="k">并发槽位</span><span class="v" id="svc_slots">—</span></div>
+        <div class="def"><span class="k">模态</span><span class="v" id="svc_mods">—</span></div>
+        <div class="def"><span class="k">请求 (处理/排队)</span><span class="v" id="gen_req">—</span></div>
+        <div class="def"><span class="k">进程 CPU</span><span class="v" id="svc_cpu">—</span></div>
+        <div class="def"><span class="k">进程内存</span><span class="v" id="svc_rss">—</span></div>
+        <div class="def"><span class="k">运行时间</span><span class="v" id="svc_up">—</span></div>
+      </div>
+      <div class="cmd" id="svc_cmd">—</div>
+    </section>
+
+    <section class="section">
+      <h2>MTP 投机解码</h2>
+      <div class="defs">
+        <div class="def"><span class="k">实时接受率</span><span class="v" id="mtp_inst">—</span></div>
+        <div class="def"><span class="k">各位置接受率</span><span class="v" id="mtp_pos">—</span></div>
+        <div class="def"><span class="k">验证步数</span><span class="v" id="mtp_drafts">—</span></div>
+        <div class="def"><span class="k">草稿 tokens</span><span class="v" id="mtp_drafttok">—</span></div>
+        <div class="def"><span class="k">被接受 tokens</span><span class="v" id="mtp_acc">—</span></div>
+        <div class="def"><span class="k">Prompt tokens</span><span class="v" id="gen_tok_prompt">—</span></div>
+        <div class="def"><span class="k">缓存命中</span><span class="v" id="gen_tok_cached">—</span></div>
+        <div class="def"><span class="k">生成 tokens</span><span class="v" id="gen_tok_pred">—</span></div>
+        <div class="def"><span class="k">最大序列长度</span><span class="v" id="gen_tok_max">—</span></div>
+      </div>
+      <canvas class="chart" id="mtp_chart"></canvas>
+    </section>
+
+    <section class="section">
+      <h2>日志速度 <span class="sub">journalctl</span></h2>
+      <div class="defs">
+        <div class="def"><span class="k">填充速度</span><span class="v" id="log_prompt">—</span></div>
+        <div class="def"><span class="k">生成速度</span><span class="v" id="log_gen">—</span></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>生成速度趋势 <span class="sub">近 10 分钟</span></h2>
+      <canvas class="chart" id="gen_trend"></canvas>
+    </section>
+  </div>
+
+  <!-- ===== GPU 栏 ===== -->
+  <div class="col">
+    <section class="section">
+      <h2>GPU</h2>
+      <div id="gpu_blocks"></div>
+      <canvas class="chart" id="gpu_chart"></canvas>
+      <div class="legend"><span class="sw" style="background:#58a6ff"></span>GPU0 利用率&nbsp;&nbsp;<span class="sw" style="background:#3fb950"></span>GPU1 利用率</div>
+    </section>
+  </div>
+
+  <!-- ===== 其他硬件栏 ===== -->
+  <div class="col">
+    <section class="section">
+      <h2>CPU / 内存</h2>
+      <div class="defs">
+        <div class="def"><span class="k">CPU 使用率</span><span class="v" id="cpu_usage">—</span></div>
+        <div class="def"><span class="k">内存使用率</span><span class="v" id="mem_pct">—</span></div>
+        <div class="def"><span class="k">核心数</span><span class="v" id="cpu_cores">—</span></div>
+        <div class="def"><span class="k">已用 / 总量</span><span class="v" id="mem_used">—</span></div>
+        <div class="def"><span class="k">负载 (1/5/15m)</span><span class="v" id="cpu_load">—</span></div>
+        <div class="def"><span class="k">可用</span><span class="v" id="mem_avail">—</span></div>
+        <div class="def"><span class="k">CPU 温度</span><span class="v" id="cpu_temp">—</span></div>
+        <div class="def"><span class="k">Swap</span><span class="v" id="mem_swap">—</span></div>
+      </div>
+      <div class="bar"><i id="mem_bar"></i></div>
+      <canvas class="chart" id="cpu_mem_chart"></canvas>
+      <div class="legend"><span class="sw" style="background:#d29922"></span>CPU 使用率&nbsp;&nbsp;<span class="sw" style="background:#f85149"></span>内存使用率</div>
+    </section>
+
+    <section class="section">
+      <h2>磁盘</h2>
+      <div class="defs">
+        <div class="def"><span class="k">IO</span><span class="v" id="disk_io">—</span></div>
+        <div class="def"><span class="k">温度</span><span class="v" id="disk_temp">—</span></div>
+      </div>
+      <table>
+        <thead><tr><th>挂载点</th><th>容量</th><th>已用</th><th>使用率</th></tr></thead>
+        <tbody id="disk_rows"></tbody>
+      </table>
+      <canvas class="chart" id="disk_chart"></canvas>
+      <div class="legend"><span class="sw" style="background:#3fb950"></span>读 MB/s&nbsp;&nbsp;<span class="sw" style="background:#d29922"></span>写 MB/s</div>
+    </section>
+
+    <section class="section">
+      <h2>系统内存 ECC (EDAC)</h2>
+      <div class="defs">
+        <div class="def"><span class="k">可纠正错误 (CE)</span><span class="big" id="edac_ce">—</span></div>
+        <div class="def"><span class="k">不可纠正错误 (UE)</span><span class="big" id="edac_ue">—</span></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+/* ---------- 主题 ---------- */
+const savedTheme = localStorage.getItem("theme") || "dark";
+document.body.className = "t-" + savedTheme;
+$("theme").value = savedTheme;
+$("theme").onchange = e => {
+  localStorage.setItem("theme", e.target.value);
+  document.body.className = "t-" + e.target.value;
+};
+
+/* ---------- 工具 ---------- */
+function fmt(n, d = 0) {
+  return n == null ? "—" : Number(n).toLocaleString("zh-CN",
+    { maximumFractionDigits: d, minimumFractionDigits: d });
+}
+function fmtDur(s) {
+  if (s == null) return "—";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return (h ? h + "h " : "") + m + "m " + (s % 60) + "s";
+}
+function cls(v, warn, bad) {
+  return v == null ? "" : v >= bad ? "bad" : v >= warn ? "warn" : "ok";
+}
+function chart(canvas, series, max, h) {
+  h = h || 48;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  if (!w) return;
+  if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  let m = max || 0;
+  for (const s of series) for (const v of s.data) if (v != null && v > m) m = v;
+  if (m <= 0) m = 1;
+  m *= 1.1;
+  const gridColor = getComputedStyle(document.body).getPropertyValue("--border").trim() || "#21262d";
+  ctx.strokeStyle = gridColor; ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) { const y = h * i / 4; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  let len = 0;
+  for (const s of series) len = Math.max(len, s.data.length);
+  for (const s of series) {
+    ctx.beginPath();
+    let started = false;
+    s.data.forEach((v, i) => {
+      if (v == null) return;
+      const x = len > 1 ? i / (len - 1) * w : 0;
+      const y = h - 3 - (v / m) * (h - 6);
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = s.color; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+}
+
+/* ---------- 渲染 ---------- */
+function render(d) {
+  if (!d || !d.llama) return;
+  const L = d.llama, M = L.metrics;
+  $("dot").className = "dot" + (L.up ? "" : " down");
+  const p = L.props || {};
+  $("model").textContent = p.alias || "llama-server";
+  const mods = p.modalities ? Object.keys(p.modalities).filter(k => p.modalities[k]).join("/") : null;
+  $("modelsub").textContent = [p.ftype, p.n_ctx ? "ctx " + fmt(p.n_ctx) : null,
+    p.slots ? p.slots + " slots" : null, mods].filter(Boolean).join(" · ");
+  $("clock").textContent = new Date(d.t * 1000).toLocaleString("zh-CN");
+
+  /* --- 主指标栏 --- */
+  const g = d.gpus;
+  const LG = L.log;
+  let cumAvg = null;
+  if (M && M.tokens && M.tokens.predicted > 0 && M.tokens.predicted_seconds > 0) {
+    cumAvg = M.tokens.predicted / M.tokens.predicted_seconds;
+  }
+  const cumStr = cumAvg != null ? "累计平均 " + fmt(cumAvg, 1) + " t/s" : "";
+  // 速度取日志里服务端自测值（metrics 计数器只在请求结束时跳变，生成中恒为 0）
+  const live = LG && LG.gen_live;
+  const lastGen = LG && LG.gen && LG.gen.ts != null && (d.t - LG.gen.ts) <= 15;
+  if (live) {
+    $("k_gen").innerHTML = '<span class="num">' + fmt(live.tg, 1) + '</span><span class="u">t/s</span>';
+    $("k_gen_sub").textContent = "3s " + fmt(live.tg_3s, 1) + " t/s" + (cumStr ? " · " + cumStr : "");
+  } else if (lastGen) {
+    $("k_gen").innerHTML = '<span class="num dim">' + fmt(LG.gen.tps, 1) + '</span><span class="u">t/s</span>';
+    $("k_gen_sub").textContent = "刚结束 · " + cumStr;
+  } else {
+    $("k_gen").innerHTML = '<span class="num dim">空闲</span>';
+    $("k_gen_sub").textContent = cumStr;
+  }
+  const mtpAcc = M && M.mtp ? M.mtp.accept : null;
+  $("k_mtp").innerHTML = '<span class="num">' + fmt(mtpAcc, 1) + '</span><span class="u">%</span>';
+  $("k_mtp_sub").textContent = "实时 " + (M && M.mtp && M.mtp.accept_inst != null ? fmt(M.mtp.accept_inst, 1) + "%" : "—");
+  const utils = g.map(x => x.util).filter(v => v != null);
+  const gpuAvg = utils.length ? utils.reduce((a, b) => a + b, 0) / utils.length : null;
+  $("k_gpu").innerHTML = '<span class="num">' + fmt(gpuAvg) + '</span><span class="u">%</span>';
+  $("k_gpu_sub").textContent = g.map((x, i) => "GPU" + i + " " + fmt(x.util) + "%").join(" · ");
+  const vramU = g.reduce((a, x) => a + (x.vram_used || 0), 0);
+  const vramT = g.reduce((a, x) => a + (x.vram_total || 0), 0);
+  $("k_vram").innerHTML = '<span class="num">' + fmt(vramU / 1024, 1) + '</span><span class="u">/ ' + fmt(vramT / 1024, 1) + ' GB</span>';
+  $("k_vram_sub").textContent = vramT ? fmt(100 * vramU / vramT, 1) + "% 已用" : "";
+  $("k_cpu").innerHTML = '<span class="num">' + fmt(d.cpu.usage, 1) + '</span><span class="u">%</span>';
+  $("k_mem").innerHTML = '<span class="num">' + fmt(d.mem.used_gb, 1) + '</span><span class="u">/ ' + fmt(d.mem.total_gb, 1) + ' GB</span>';
+  $("k_mem_sub").textContent = fmt(d.mem.pct, 1) + "% 已用";
+
+  chart($("k_gen_c"), [{ color: "#58a6ff", data: d.history.gen_tps }], 100, 30);
+  chart($("k_mtp_c"), [{ color: "#bc8cff", data: d.history.mtp }], 100, 30);
+  chart($("k_gpu_c"), [{ color: "#3fb950", data: d.history.gpu_util0 }], 100, 30);
+  chart($("k_vram_c"), [{ color: "#b18cff", data: d.history.vram0 }], 0, 30);
+  chart($("k_cpu_c"), [{ color: "#d29922", data: d.history.cpu }], 100, 30);
+  chart($("k_mem_c"), [{ color: "#f85149", data: d.history.ram }], 100, 30);
+
+  /* --- 推理服务 --- */
+  $("svc_status").textContent = L.up ? "运行中" : "未运行";
+  $("svc_status").className = "v " + (L.up ? "ok" : "bad");
+  $("svc_model").textContent = p.alias || "—";
+  $("svc_ftype").textContent = p.ftype || "—";
+  $("svc_ctx").textContent = p.n_ctx ? fmt(p.n_ctx) : "—";
+  $("svc_slots").textContent = p.slots != null ? p.slots : "—";
+  $("svc_mods").textContent = mods || "—";
+  const pr = L.proc || {};
+  $("svc_cpu").textContent = pr.cpu_pct != null ? fmt(pr.cpu_pct, 1) + "%" : "—";
+  $("svc_rss").textContent = pr.rss_gb != null ? fmt(pr.rss_gb, 2) + " GB" : "—";
+  $("svc_up").textContent = fmtDur(pr.uptime_s);
+  $("svc_cmd").textContent = pr.cmdline || "—";
+
+  /* --- MTP --- */
+  if (M) {
+    $("gen_req").textContent = fmt(M.requests.processing) + " / " + fmt(M.requests.deferred);
+    const t = M.mtp;
+    $("mtp_inst").textContent = t.accept_inst != null ? fmt(t.accept_inst, 1) + "%" : "—";
+    $("mtp_pos").textContent = Object.entries(t.pos || {})
+      .map(([k, v]) => "P" + k + ": " + fmt(v, 1) + "%").join("  ") || "—";
+    $("mtp_drafts").textContent = fmt(t.drafts);
+    $("mtp_drafttok").textContent = fmt(t.draft_tokens);
+    $("mtp_acc").textContent = fmt(t.accepted);
+    $("gen_tok_prompt").textContent = fmt(M.tokens.prompt);
+    $("gen_tok_cached").textContent = fmt(M.tokens.cached);
+    $("gen_tok_pred").textContent = fmt(M.tokens.predicted);
+    $("gen_tok_max").textContent = fmt(M.tokens.max_seq);
+  }
+  chart($("mtp_chart"), [{ color: "#bc8cff", data: d.history.mtp }], 100);
+  chart($("gen_trend"), [{ color: "#58a6ff", data: d.history.gen_tps }], 100);
+
+  /* --- 日志速度 (journalctl，最近一次请求的结束值) --- */
+  if (LG) {
+    $("log_prompt").textContent = LG.prompt
+      ? fmt(LG.prompt.tps, 1) + " t/s · " + fmt(LG.prompt.tokens) + " tok / " + fmt(LG.prompt.ms) + " ms"
+      : "—";
+    $("log_gen").textContent = LG.gen
+      ? fmt(LG.gen.tps, 1) + " t/s · " + fmt(LG.gen.tokens) + " tok / " + fmt(LG.gen.ms / 1000, 1) + " s"
+      : "—";
+  }
+
+  /* --- GPU --- */
+  let ghtml = "";
+  g.forEach(x => {
+    const eccBad = (x.ecc_ue_vol > 0 || x.ecc_ue_agg > 0);
+    const eccWarn = (x.ecc_ce_vol > 0 || x.ecc_ce_agg > 0);
+    ghtml += '<div class="gpu">' +
+      '<div class="gpu-head">GPU ' + x.index + ' <span class="sub">' + x.name + '</span></div>' +
+      '<div class="defs">' +
+      '<div class="def"><span class="k">温度</span><span class="v ' + cls(x.temp, 70, 85) + '">' + x.temp + ' °C</span></div>' +
+      '<div class="def"><span class="k">利用率</span><span class="v">' + fmt(x.util) + '%</span></div>' +
+      '<div class="def"><span class="k">显存</span><span class="v">' + fmt(x.vram_used) + ' / ' + fmt(x.vram_total) + ' MiB</span></div>' +
+      '<div class="def"><span class="k">功耗</span><span class="v">' + fmt(x.power, 1) + ' W</span></div>' +
+      '<div class="def"><span class="k">频率</span><span class="v">' + fmt(x.clock) + ' MHz</span></div>' +
+      '<div class="def"><span class="k">ECC (CE/UE)</span><span class="v ' + (eccBad ? "bad" : eccWarn ? "warn" : "ok") + '">' + fmt(x.ecc_ce_agg) + ' / ' + fmt(x.ecc_ue_agg) + '</span></div>' +
+      '</div>' +
+      '<div class="bar"><i style="width:' + (x.util || 0) + '%"></i></div>' +
+      '</div>';
+  });
+  $("gpu_blocks").innerHTML = ghtml;
+  chart($("gpu_chart"), [
+    { color: "#58a6ff", data: d.history.gpu_util0 },
+    { color: "#3fb950", data: d.history.gpu_util1 },
+  ], 100);
+
+  /* --- CPU / 内存 --- */
+  $("cpu_usage").textContent = fmt(d.cpu.usage, 1) + "%";
+  $("cpu_cores").textContent = d.cpu.cores;
+  $("cpu_load").textContent = d.cpu.load.join("  ");
+  $("cpu_temp").textContent = d.cpu.temp != null ? fmt(d.cpu.temp, 1) + " °C" : "N/A";
+  $("mem_pct").textContent = fmt(d.mem.pct, 1) + "%";
+  $("mem_used").textContent = fmt(d.mem.used_gb, 1) + " / " + fmt(d.mem.total_gb, 1) + " GB";
+  $("mem_bar").style.width = d.mem.pct + "%";
+  $("mem_avail").textContent = fmt(d.mem.avail_gb, 1) + " GB";
+  $("mem_swap").textContent = fmt(d.mem.swap_used_gb, 1) + " / " + fmt(d.mem.swap_total_gb, 1) + " GB";
+  chart($("cpu_mem_chart"), [
+    { color: "#d29922", data: d.history.cpu },
+    { color: "#f85149", data: d.history.ram },
+  ], 100);
+
+  /* --- 磁盘 --- */
+  let drows = "";
+  for (const m of d.disks.mounts) {
+    drows += '<tr><td>' + m.mount + '</td><td>' + fmt(m.size_gb, 1) + ' GB</td><td>' +
+      fmt(m.used_gb, 1) + ' GB</td><td class="' + cls(m.pct, 80, 90) + '">' + fmt(m.pct, 1) + '%</td></tr>';
+  }
+  $("disk_rows").innerHTML = drows;
+  $("disk_io").textContent = "读 " + fmt(d.disks.read_mbps, 1) + " MB/s · 写 " + fmt(d.disks.write_mbps, 1) + " MB/s";
+  $("disk_temp").textContent = Object.entries(d.disk_temps || {})
+    .map(([k, v]) => k.replace("/dev/", "") + " " + v + "°C").join("  ") || "N/A";
+  chart($("disk_chart"), [
+    { color: "#3fb950", data: d.history.disk_r },
+    { color: "#d29922", data: d.history.disk_w },
+  ], 0);
+
+  /* --- EDAC --- */
+  $("edac_ce").textContent = d.edac ? fmt(d.edac.ce) : "N/A";
+  $("edac_ce").className = d.edac ? (d.edac.ce > 0 ? "big bad" : "big ok") : "big";
+  $("edac_ue").textContent = d.edac ? fmt(d.edac.ue) : "N/A";
+  $("edac_ue").className = d.edac ? (d.edac.ue > 0 ? "big bad" : "big ok") : "big";
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/api/status");
+    render(await r.json());
+  } catch (e) {
+    $("dot").className = "dot down";
+    $("model").textContent = "无法连接监控服务";
+  }
+  setTimeout(tick, 2000);
+}
+tick();
+</script>
+</body>
+</html>

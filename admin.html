@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llama-server 管理控制台</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/themes.css">
+</head>
+<body class="t-dark">
+<header>
+  <div class="dot" id="dot"></div>
+  <h1>llama-server 管理控制台</h1>
+  <span style="margin-left:auto; display:flex; align-items:center; gap:10px">
+    <a class="link" href="/">返回监控</a>
+    <select id="theme" title="切换主题">
+      <option value="dark">深色</option>
+      <option value="light">浅色</option>
+      <option value="glass">玻璃</option>
+      <option value="terminal">终端</option>
+      <option value="bento">渐变</option>
+    </select>
+    <button class="btn" id="btn_logout">退出</button>
+  </header>
+
+<!-- ===== 登录框 ===== -->
+<div id="login_box" class="loginbox">
+  <h2>管理员登录</h2>
+  <input class="inp" id="login_pw" type="password" placeholder="管理密码" autocomplete="current-password">
+  <button class="btn" id="btn_login">登录</button>
+  <div class="msg bad" id="login_err"></div>
+</div>
+
+<!-- ===== 管理主区 ===== -->
+<div id="admin_main" style="display:none">
+  <div class="cols cols2">
+    <div class="col">
+      <section class="section">
+        <h2>服务控制</h2>
+        <div class="defs">
+          <div class="def"><span class="k">状态</span><span class="v big" id="svc_state">—</span></div>
+          <div class="def"><span class="k">PID</span><span class="v big" id="svc_pid">—</span></div>
+          <div class="def"><span class="k">启动时间</span><span class="v" id="svc_started">—</span></div>
+          <div class="def"><span class="k">模型睡眠</span><span class="v" id="svc_sleep">—</span></div>
+        </div>
+        <div class="btnrow">
+          <button class="btn ok" id="btn_start">启动</button>
+          <button class="btn" id="btn_restart">重启</button>
+          <button class="btn bad" id="btn_stop">停止</button>
+        </div>
+        <div class="msg" id="svc_msg"></div>
+      </section>
+
+      <section class="section">
+        <h2>启动参数</h2>
+        <div class="fgroup">
+          <div class="frow">
+            <label class="flab">-m 模型文件</label>
+            <input class="inp grow" id="f_model" readonly title="点击右侧按钮选择">
+            <button class="btn" onclick="openFileBrowser('f_model')">选择</button>
+          </div>
+          <div class="frow">
+            <label class="flab">--mmproj 多模态文件</label>
+            <input class="inp grow" id="f_mmproj" readonly>
+            <button class="btn" onclick="openFileBrowser('f_mmproj')">选择</button>
+          </div>
+          <div class="frow">
+            <label class="flab">--spec-draft MTP 草稿模型</label>
+            <input class="inp grow" id="f_draft" readonly>
+            <button class="btn" onclick="openFileBrowser('f_draft')">选择</button>
+          </div>
+        </div>
+        <div class="fgroup">
+          <div class="frow">
+            <label class="flab">-c 上下文</label><input class="inp num" id="f_c" type="number">
+            <label class="flab">-ngl 卸载层</label><input class="inp num" id="f_ngl" type="number">
+            <label class="flab">-t 线程</label><input class="inp num" id="f_t" type="number">
+            <label class="flab">-np 槽位</label><input class="inp num" id="f_np" type="number">
+            <label class="flab">-b 批</label><input class="inp num" id="f_b" type="number">
+            <label class="flab">-ub 微批</label><input class="inp num" id="f_ub" type="number">
+            <label class="flab">--port 端口</label><input class="inp num" id="f_port" type="number">
+            <label class="flab">--spec-draft-n-max</label><input class="inp num" id="f_dmax" type="number">
+            <label class="flab">--cache-ram</label><input class="inp num" id="f_cram" type="number">
+            <label class="flab">--temp</label><input class="inp num" id="f_temp" type="number" step="0.05">
+            <label class="flab">--top-k</label><input class="inp num" id="f_topk" type="number">
+            <label class="flab">--top-p</label><input class="inp num" id="f_topp" type="number" step="0.01">
+            <label class="flab">--min-p</label><input class="inp num" id="f_minp" type="number" step="0.01">
+          </div>
+        </div>
+        <div class="fgroup">
+          <div class="frow">
+            <label class="flab">-fa 注意力</label>
+            <select class="inp sel" id="f_fa">
+              <option value="">不设置</option><option value="on">on</option><option value="off">off</option><option value="auto">auto</option>
+            </select>
+            <label class="flab">--split-mode</label>
+            <select class="inp sel" id="f_split">
+              <option value="">不设置</option><option value="tensor">tensor</option><option value="layer">layer</option><option value="row">row</option><option value="none">none</option>
+            </select>
+            <label class="flab">-ctk KV-K</label>
+            <select class="inp sel" id="f_ctk">
+              <option value="">不设置</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option><option value="iq4_nl">iq4_nl</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="f32">f32</option>
+            </select>
+            <label class="flab">-ctv KV-V</label>
+            <select class="inp sel" id="f_ctv">
+              <option value="">不设置</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option><option value="iq4_nl">iq4_nl</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="f32">f32</option>
+            </select>
+            <label class="flab">--load-mode</label>
+            <select class="inp sel" id="f_load">
+              <option value="">不设置</option><option value="auto">auto</option><option value="none">none</option><option value="mmap">mmap</option><option value="mlock">mlock</option><option value="mmap+mlock">mmap+mlock</option><option value="dio">dio</option>
+            </select>
+            <label class="flab">--spec-type</label>
+            <select class="inp sel" id="f_spectype">
+              <option value="">不设置</option><option value="draft-mtp">draft-mtp</option><option value="draft-simple">draft-simple</option><option value="draft-eagle3">draft-eagle3</option><option value="draft-dflash">draft-dflash</option><option value="draft-dspark">draft-dspark</option><option value="ngram-simple">ngram-simple</option><option value="ngram-map-k">ngram-map-k</option><option value="ngram-map-k4v">ngram-map-k4v</option><option value="ngram-mod">ngram-mod</option><option value="ngram-cache">ngram-cache</option><option value="none">none</option>
+            </select>
+            <label class="flab">--reasoning</label>
+            <select class="inp sel" id="f_reasoning">
+              <option value="">不设置</option><option value="auto">auto</option><option value="on">on</option><option value="off">off</option>
+            </select>
+          </div>
+        </div>
+        <div class="fgroup">
+          <div class="frow chkrow">
+            <label class="chk"><input type="checkbox" id="f_metrics"> --metrics</label>
+            <label class="chk"><input type="checkbox" id="f_nohost"> --no-host</label>
+            <label class="chk"><input type="checkbox" id="f_nommo"> --no-mmproj-offload</label>
+          </div>
+        </div>
+        <div class="fgroup">
+          <div class="frow">
+            <label class="flab">--alias</label><input class="inp grow" id="f_alias" placeholder="模型别名">
+            <label class="flab">--device</label><input class="inp grow" id="f_device" placeholder="CUDA0,CUDA1">
+            <label class="flab">--tensor-split</label><input class="inp grow" id="f_ts" placeholder="1,1">
+            <label class="flab">--host</label><input class="inp grow" id="f_host" placeholder="0.0.0.0">
+          </div>
+          <div class="frow">
+            <label class="flab">--chat-template-kwargs</label><input class="inp grow" id="f_kwargs" placeholder='{"reasoning_effort":"medium"}'>
+          </div>
+        </div>
+        <div class="fgroup">
+          <label class="flab block">自定义命令（其他参数）</label>
+          <textarea class="ta" id="f_custom" rows="3" spellcheck="false"></textarea>
+        </div>
+        <div class="cmd" id="cmd_preview"></div>
+        <div class="btnrow">
+          <select class="inp grow" id="cmd_hist" title="历史命令"></select>
+          <button class="btn" id="btn_cmd_revert">恢复当前</button>
+        </div>
+        <div class="btnrow">
+          <button class="btn" id="btn_cmd_save">保存</button>
+          <button class="btn ok" id="btn_cmd_save_restart">保存并重启</button>
+        </div>
+        <div class="msg" id="cmd_msg"></div>
+      </section>
+
+      <section class="section">
+        <h2>快速测试</h2>
+        <div class="testrow">
+          <input class="inp grow" id="test_prompt" value="用一句话介绍你自己">
+          <input class="inp num" id="test_max" type="number" value="64" min="1" max="1024" title="生成 token 数">
+          <button class="btn" id="btn_test">生成</button>
+        </div>
+        <div class="msg" id="test_status"></div>
+        <div class="logview small" id="test_out"></div>
+      </section>
+
+      <section class="section">
+        <h2>修改密码</h2>
+        <div class="testrow">
+          <input class="inp grow" id="pw_old" type="password" placeholder="当前密码" autocomplete="current-password">
+          <input class="inp grow" id="pw_new" type="password" placeholder="新密码" autocomplete="new-password">
+          <input class="inp grow" id="pw_new2" type="password" placeholder="重复新密码" autocomplete="new-password">
+        </div>
+        <div class="btnrow"><button class="btn" id="btn_pw">修改</button></div>
+        <div class="msg" id="pw_status"></div>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="section">
+        <h2>实时日志 <span class="sub" id="log_state"></span></h2>
+        <div class="btnrow">
+          <select class="inp" id="log_prio">
+            <option value="info">info 及以上</option>
+            <option value="warning">warning 及以上</option>
+            <option value="err">仅错误</option>
+          </select>
+          <label class="chk"><input type="checkbox" id="log_follow" checked> 跟随</label>
+          <button class="btn" id="btn_log_refresh">刷新</button>
+          <button class="btn" id="btn_log_clear">清空</button>
+          <a class="link" id="log_dl" href="#">下载</a>
+        </div>
+        <div class="logview" id="log_view"></div>
+      </section>
+
+      <section class="section">
+        <h2>最近错误</h2>
+        <div class="logview small" id="err_view"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 文件选择弹窗 ===== -->
+<div id="file_modal" class="modal" style="display:none">
+  <div class="modal-box">
+    <div class="modal-head"><span id="fm_path"></span><button class="btn" id="fm_close">关闭</button></div>
+    <div class="fm-list" id="fm_list"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let token = localStorage.getItem("admin_token");
+let es = null;
+
+/* ---------- 主题 ---------- */
+const savedTheme = localStorage.getItem("theme") || "dark";
+document.body.className = "t-" + savedTheme;
+$("theme").value = savedTheme;
+$("theme").onchange = e => {
+  localStorage.setItem("theme", e.target.value);
+  document.body.className = "t-" + e.target.value;
+};
+
+/* ---------- API ---------- */
+function api(path, body) {
+  const opt = { method: body ? "POST" : "GET",
+                headers: { "X-Admin-Token": token || "" } };
+  if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  return fetch(path, opt).then(async r => {
+    if (r.status === 401) { showLogin(); throw new Error("未登录"); }
+    return r.json();
+  });
+}
+
+function showLogin() {
+  token = null;
+  localStorage.removeItem("admin_token");
+  $("login_box").style.display = "";
+  $("admin_main").style.display = "none";
+  if (es) { es.close(); es = null; }
+}
+
+function showMain() {
+  $("login_box").style.display = "none";
+  $("admin_main").style.display = "";
+  refreshService();
+  loadCmd();
+  loadTail();
+  openStream();
+  refreshErrors();
+}
+
+$("btn_login").onclick = async () => {
+  $("login_err").textContent = "";
+  try {
+    const r = await fetch("/api/admin/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: $("login_pw").value })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "登录失败");
+    token = j.token;
+    localStorage.setItem("admin_token", token);
+    $("login_pw").value = "";
+    showMain();
+  } catch (e) { $("login_err").textContent = e.message; }
+};
+$("login_pw").onkeydown = e => { if (e.key === "Enter") $("btn_login").click(); };
+$("btn_logout").onclick = showLogin;
+
+/* ---------- 服务控制 ---------- */
+async function refreshService() {
+  if (!token) return;
+  try {
+    const j = await api("/api/admin/service");
+    $("svc_state").textContent = j.active + (j.sub ? " / " + j.sub : "");
+    $("svc_state").className = "v big " + (j.active === "active" ? "ok" : "bad");
+    $("svc_pid").textContent = j.pid || "—";
+    $("svc_started").textContent = j.started || "—";
+    $("dot").className = "dot" + (j.active === "active" ? "" : " down");
+  } catch (e) {}
+  try {
+    const s = await (await fetch("/api/status")).json();
+    const sl = s.llama && s.llama.props && s.llama.props.sleeping;
+    $("svc_sleep").textContent = sl ? "是" : "否";
+    $("svc_sleep").className = "v " + (sl ? "warn" : "ok");
+  } catch (e) {}
+}
+
+async function doAction(action, label) {
+  if (!confirm("确定要" + label + " llama-server 吗？")) return;
+  $("svc_msg").textContent = label + "中…";
+  try {
+    const j = await api("/api/admin/service", { action });
+    $("svc_msg").textContent = j.ok ? label + "成功" : (j.error || label + "失败");
+    $("svc_msg").className = "msg " + (j.ok ? "ok" : "bad");
+    refreshService();
+  } catch (e) { $("svc_msg").textContent = e.message; $("svc_msg").className = "msg bad"; }
+}
+$("btn_start").onclick = () => doAction("start", "启动");
+$("btn_restart").onclick = () => doAction("restart", "重启");
+$("btn_stop").onclick = () => doAction("stop", "停止");
+
+/* ---------- 启动参数（结构化表单） ---------- */
+let cmdHist = [], cmdBinary = "";
+const NUM_IDS = [["f_c","-c"],["f_ngl","-ngl"],["f_t","-t"],["f_np","-np"],
+                 ["f_b","-b"],["f_ub","-ub"],["f_port","--port"],["f_dmax","--spec-draft-n-max"],
+                 ["f_cram","--cache-ram"],["f_temp","--temp"],["f_topk","--top-k"],
+                 ["f_topp","--top-p"],["f_minp","--min-p"]];
+const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_ctv","-ctv"],
+                 ["f_load","--load-mode"],["f_spectype","--spec-type"],["f_reasoning","--reasoning"]];
+const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","--no-mmproj-offload"]];
+const TXT_IDS = [["f_alias","--alias"],["f_device","--device"],["f_ts","--tensor-split"],
+                 ["f_host","--host"],["f_kwargs","--chat-template-kwargs"]];
+
+function buildCmd() {
+  const v = id => $(id).value.trim();
+  const parts = [];
+  if (v("f_model")) parts.push("-m", v("f_model"));
+  if (v("f_mmproj")) parts.push("--mmproj", v("f_mmproj"));
+  if (v("f_draft")) parts.push("--spec-draft", v("f_draft"));
+  for (const [id, p] of NUM_IDS) { const x = v(id); if (x) parts.push(p, x); }
+  for (const [id, p] of SEL_IDS) { const x = v(id); if (x) parts.push(p, x); }
+  for (const [id, txt] of CHK_IDS) if ($(id).checked) parts.push(txt);
+  for (const [id, p] of TXT_IDS) {
+    let x = v(id);
+    if (!x) continue;
+    if (id === "f_kwargs" && x.includes("{") && !x.startsWith("'")) x = "'" + x + "'";
+    parts.push(p, x);
+  }
+  const custom = v("f_custom");
+  if (custom) parts.push(custom);
+  return (cmdBinary ? cmdBinary + " " : "") + parts.join(" ");
+}
+
+function updatePreview() {
+  $("cmd_preview").textContent = buildCmd() || "（空）";
+}
+
+function fillForm(p) {
+  $("f_model").value = p.model || "";
+  $("f_mmproj").value = p.mmproj || "";
+  $("f_draft").value = p.draft || "";
+  for (const [id, key] of [["f_c","c"],["f_ngl","ngl"],["f_t","t"],["f_np","np"],
+                           ["f_b","b"],["f_ub","ub"],["f_port","port"],["f_dmax","draft_n_max"],
+                           ["f_cram","cache_ram"],["f_temp","temp"],["f_topk","top_k"],
+                           ["f_topp","top_p"],["f_minp","min_p"]])
+    $(id).value = p[key] || "";
+  for (const [id, key] of [["f_fa","fa"],["f_split","split"],["f_ctk","ctk"],["f_ctv","ctv"],
+                           ["f_load","load_mode"],["f_spectype","spec_type"],["f_reasoning","reasoning"]]) {
+    const x = p[key] || "";
+    $(id).value = [...$(id).options].some(o => o.value === x) ? x : "";
+  }
+  for (const [id, key] of [["f_metrics","metrics"],["f_nohost","no_host"],["f_nommo","no_mmproj_offload"]])
+    $(id).checked = !!p[key];
+  for (const [id, key] of [["f_alias","alias"],["f_device","device"],["f_ts","tensor_split"],
+                           ["f_host","host"],["f_kwargs","chat_kwargs"]])
+    $(id).value = p[key] || "";
+  $("f_custom").value = p.custom || "";
+  updatePreview();
+}
+
+async function loadCmd() {
+  if (!token) return;
+  try {
+    const j = await api("/api/admin/cmd");
+    cmdBinary = (j.parsed && j.parsed.binary) || "";
+    cmdHist = j.history || [];
+    if (j.parsed) fillForm(j.parsed);
+    const sel = $("cmd_hist");
+    sel.innerHTML = "";
+    cmdHist.forEach((h, i) => {
+      const o = document.createElement("option");
+      o.value = i;
+      const d = new Date(h.ts * 1000).toLocaleString("zh-CN");
+      o.textContent = (i === 0 ? "当前 · " : "") + d + " · " +
+        h.cmd.slice(0, 50) + (h.cmd.length > 50 ? "…" : "");
+      sel.appendChild(o);
+    });
+  } catch (e) {}
+}
+
+async function saveCmd(restart) {
+  const label = restart ? "保存并重启" : "保存";
+  if (restart && !confirm("保存后将重启 llama-server，确定继续？")) return;
+  $("cmd_msg").textContent = label + "中…";
+  try {
+    const j = await api("/api/admin/cmd", { cmd: buildCmd(), restart });
+    if (!j.ok) { $("cmd_msg").textContent = j.error; $("cmd_msg").className = "msg bad"; return; }
+    $("cmd_msg").textContent = j.changed ? label + "成功" : "命令未变化";
+    $("cmd_msg").className = "msg ok";
+    loadCmd();
+    refreshService();
+  } catch (e) { $("cmd_msg").textContent = e.message; $("cmd_msg").className = "msg bad"; }
+}
+$("cmd_hist").onchange = e => {
+  const h = cmdHist[+e.target.value];
+  if (h) fillFromRaw(h.cmd);
+};
+function fillFromRaw(cmd) {
+  // 前端粗解析：只用于历史回填，精确解析以后端为准
+  const m = cmd.match(/(\S+)\s/);
+  cmdBinary = m ? m[1] : "";
+  const p = { model: "", mmproj: "", draft: "", c: "", ngl: "", t: "", np: "", b: "", ub: "",
+              port: "", draft_n_max: "", cache_ram: "", temp: "", top_k: "", top_p: "", min_p: "",
+              fa: "", split: "", ctk: "", ctv: "", load_mode: "", spec_type: "", reasoning: "",
+              alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "",
+              metrics: false, no_host: false, no_mmproj_offload: false, custom: "" };
+  let rest = cmd.replace(cmdBinary, "");
+  const grab = (pat, key) => {
+    const mm = rest.match(pat);
+    if (mm) { p[key] = mm[1]; rest = rest.replace(mm[0], " "); }
+  };
+  grab(/(?:^|\s)-m\s+(\S+)/, "model");
+  grab(/(?:^|\s)--mmproj\s+(\S+)/, "mmproj");
+  grab(/(?:^|\s)--spec-draft\s+(\S+)/, "draft");
+  grab(/(?:^|\s)-c\s+(\S+)/, "c");
+  grab(/(?:^|\s)-ngl\s+(\S+)/, "ngl");
+  grab(/(?:^|\s)-t\s+(\S+)/, "t");
+  grab(/(?:^|\s)-np\s+(\S+)/, "np");
+  grab(/(?:^|\s)-b\s+(\S+)/, "b");
+  grab(/(?:^|\s)-ub\s+(\S+)/, "ub");
+  grab(/(?:^|\s)--port\s+(\S+)/, "port");
+  grab(/(?:^|\s)--spec-draft-n-max\s+(\S+)/, "draft_n_max");
+  grab(/(?:^|\s)--cache-ram\s+(\S+)/, "cache_ram");
+  grab(/(?:^|\s)--temp\s+(\S+)/, "temp");
+  grab(/(?:^|\s)--top-k\s+(\S+)/, "top_k");
+  grab(/(?:^|\s)--top-p\s+(\S+)/, "top_p");
+  grab(/(?:^|\s)--min-p\s+(\S+)/, "min_p");
+  grab(/(?:^|\s)-fa\s+(\S+)/, "fa");
+  grab(/(?:^|\s)--split-mode\s+(\S+)/, "split");
+  grab(/(?:^|\s)-ctk\s+(\S+)/, "ctk");
+  grab(/(?:^|\s)-ctv\s+(\S+)/, "ctv");
+  grab(/(?:^|\s)--load-mode\s+(\S+)/, "load_mode");
+  grab(/(?:^|\s)--spec-type\s+(\S+)/, "spec_type");
+  grab(/(?:^|\s)--reasoning\s+(\S+)/, "reasoning");
+  grab(/(?:^|\s)--alias\s+(\S+)/, "alias");
+  grab(/(?:^|\s)--device\s+(\S+)/, "device");
+  grab(/(?:^|\s)--tensor-split\s+(\S+)/, "tensor_split");
+  grab(/(?:^|\s)--host\s+(\S+)/, "host");
+  grab(/(?:^|\s)--chat-template-kwargs\s+(\S+)/, "chat_kwargs");
+  p.metrics = /(?:^|\s)--metrics(?=\s|$)/.test(rest);
+  p.no_host = /(?:^|\s)--no-host(?=\s|$)/.test(rest);
+  p.no_mmproj_offload = /(?:^|\s)--no-mmproj-offload(?=\s|$)/.test(rest);
+  p.custom = " ".join(rest.split());
+  fillForm(p);
+}
+$("btn_cmd_revert").onclick = loadCmd;
+$("btn_cmd_save").onclick = () => saveCmd(false);
+$("btn_cmd_save_restart").onclick = () => saveCmd(true);
+[...NUM_IDS.map(x => x[0]), ...SEL_IDS.map(x => x[0]), ...TXT_IDS.map(x => x[0]),
+ "f_model", "f_mmproj", "f_draft", "f_custom"]
+  .forEach(id => $(id).addEventListener("input", updatePreview));
+CHK_IDS.forEach(([id]) => $(id).addEventListener("change", updatePreview));
+
+/* ---------- 文件选择弹窗 ---------- */
+let fmTarget = null;
+function openFileBrowser(target, initial) {
+  fmTarget = target;
+  $("file_modal").style.display = "";
+  loadDir(initial || "/mnt/models");
+}
+async function loadDir(path) {
+  $("fm_path").textContent = path;
+  $("fm_list").innerHTML = "加载中…";
+  try {
+    const j = await api("/api/admin/files?path=" + encodeURIComponent(path));
+    const list = $("fm_list");
+    list.innerHTML = "";
+    if (j.parent) {
+      const a = document.createElement("div");
+      a.className = "fm-item dir";
+      a.textContent = "⬆ 上级目录";
+      a.onclick = () => loadDir(j.parent);
+      list.appendChild(a);
+    }
+    (j.dirs || []).forEach(d => {
+      const el = document.createElement("div");
+      el.className = "fm-item dir";
+      el.textContent = "📁 " + d;
+      el.onclick = () => loadDir(j.path + "/" + d);
+      list.appendChild(el);
+    });
+    (j.files || []).forEach(f => {
+      const el = document.createElement("div");
+      el.className = "fm-item";
+      el.textContent = f.name + "  (" + (f.size / 1048576).toFixed(1) + " MB)";
+      el.onclick = () => {
+        $(fmTarget).value = j.path + "/" + f.name;
+        $("file_modal").style.display = "none";
+        updatePreview();
+      };
+      list.appendChild(el);
+    });
+    if (!j.dirs.length && !j.files.length) {
+      const el = document.createElement("div");
+      el.className = "fm-item";
+      el.textContent = "（空目录）";
+      list.appendChild(el);
+    }
+  } catch (e) {
+    $("fm_list").textContent = "加载失败";
+  }
+}
+$("fm_close").onclick = () => { $("file_modal").style.display = "none"; };
+$("file_modal").onclick = e => { if (e.target.id === "file_modal") $("file_modal").style.display = "none"; };
+
+/* ---------- 快速测试 ---------- */
+$("btn_test").onclick = async () => {
+  $("test_status").textContent = "生成中…";
+  $("test_out").textContent = "";
+  const t0 = Date.now();
+  try {
+    const j = await api("/api/admin/test", {
+      prompt: $("test_prompt").value, n_predict: +$("test_max").value || 64 });
+    if (!j.ok) { $("test_status").textContent = j.error; $("test_status").className = "msg bad"; return; }
+    const wall = (Date.now() - t0) / 1000;
+    $("test_status").textContent =
+      "完成 · " + (j.timing.predicted_n || 0) + " tok · " +
+      (j.timing.predicted_per_second ? j.timing.predicted_per_second.toFixed(1) : "—") +
+      " t/s（服务端计时）· 端到端 " + wall.toFixed(1) + " s";
+    $("test_status").className = "msg ok";
+    $("test_out").textContent = j.content || "";
+  } catch (e) { $("test_status").textContent = e.message; $("test_status").className = "msg bad"; }
+};
+
+/* ---------- 日志 ---------- */
+const MAXLINES = 800;
+function addLine(view, line, max) {
+  const d = document.createElement("div");
+  d.className = "ll" + (/\.\d{3} E /.test(line) ? " bad" : /\.\d{3} W /.test(line) ? " warn" : "");
+  d.textContent = line;
+  view.appendChild(d);
+  while (view.children.length > max) view.removeChild(view.firstChild);
+}
+
+function loadTail() {
+  const prio = $("log_prio").value;
+  api("/api/admin/logs?n=100&prio=" + prio).then(j => {
+    const v = $("log_view");
+    v.innerHTML = "";
+    (j.lines || []).forEach(l => addLine(v, l, MAXLINES));
+    v.scrollTop = v.scrollHeight;
+  }).catch(() => {});
+}
+
+function openStream() {
+  if (es) { es.close(); es = null; }
+  if (!$("log_follow").checked) { $("log_state").textContent = "（已暂停跟随）"; return; }
+  $("log_state").textContent = "";
+  es = new EventSource("/api/admin/logs/stream?token=" + encodeURIComponent(token) +
+                       "&prio=" + $("log_prio").value);
+  es.onmessage = e => {
+    const v = $("log_view");
+    const pin = v.scrollHeight - v.scrollTop - v.clientHeight < 40;
+    addLine(v, e.data, MAXLINES);
+    if (pin) v.scrollTop = v.scrollHeight;
+  };
+  es.onerror = () => { $("log_state").textContent = "（连接断开，自动重连中…）"; };
+}
+
+$("log_follow").onchange = openStream;
+$("log_prio").onchange = () => { loadTail(); openStream(); };
+$("btn_log_refresh").onclick = loadTail;
+$("btn_log_clear").onclick = () => { $("log_view").innerHTML = ""; };
+$("log_dl").onclick = e => {
+  e.preventDefault();
+  const a = document.createElement("a");
+  a.href = "/api/admin/logs/download?token=" + encodeURIComponent(token) +
+           "&n=2000&prio=" + $("log_prio").value;
+  a.download = "llama-server.log";
+  a.click();
+};
+
+async function refreshErrors() {
+  if (!token) return;
+  try {
+    const j = await api("/api/admin/logs?n=50&prio=err");
+    const v = $("err_view");
+    v.innerHTML = "";
+    (j.lines || []).forEach(l => addLine(v, l, 200));
+    v.scrollTop = v.scrollHeight;
+  } catch (e) {}
+}
+
+/* ---------- 修改密码 ---------- */
+$("btn_pw").onclick = async () => {
+  const a = $("pw_new").value, b = $("pw_new2").value;
+  if (a !== b) { $("pw_status").textContent = "两次输入的新密码不一致"; $("pw_status").className = "msg bad"; return; }
+  try {
+    const r = await fetch("/api/admin/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Token": token },
+      body: JSON.stringify({ old: $("pw_old").value, new: a })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "修改失败");
+    $("pw_status").textContent = "密码已修改";
+    $("pw_status").className = "msg ok";
+    $("pw_old").value = $("pw_new").value = $("pw_new2").value = "";
+  } catch (e) { $("pw_status").textContent = e.message; $("pw_status").className = "msg bad"; }
+};
+
+setInterval(refreshService, 5000);
+setInterval(refreshErrors, 15000);
+
+/* ---------- 初始化 ---------- */
+if (token) {
+  api("/api/admin/service").then(showMain).catch(showLogin);
+} else {
+  showLogin();
+}
+</script>
+</body>
+</html>

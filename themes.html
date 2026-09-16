@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>选择主题 · 模型服务器监控</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/themes.css">
+<style>
+body { padding: 28px; }
+h1 { font-size: 22px; margin-bottom: 6px; }
+.desc { color: var(--dim); margin-bottom: 24px; }
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 18px; }
+.pick { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; box-shadow: var(--shadow); }
+.preview { padding: 14px; min-height: 320px; }
+.preview .kpis { margin-bottom: 12px; }
+.preview .kpi { padding: 12px 14px 10px; }
+.preview .kpi-value { font-size: 30px; }
+.preview .kpi-spark { width: 100%; height: 36px; margin-top: 6px; }
+.preview .section { padding: 10px 0; }
+.preview table { font-size: 13px; }
+.preview td { padding: 6px 8px; }
+.pick-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 14px 16px; border-top: 1px solid var(--border); }
+.pick-foot .name { font-weight: 700; font-size: 15px; }
+.pick-foot .note { color: var(--dim); font-size: 12px; }
+button.use { background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+  padding: 9px 18px; font-size: 13px; cursor: pointer; font-weight: 600; flex: none; }
+button.use:hover { filter: brightness(1.12); }
+</style>
+</head>
+<body class="t-dark">
+<h1>选择主题</h1>
+<p class="desc">下面每块都是该主题的真实效果预览。点「使用此主题」立即生效并记住；之后也可以在主页右上角随时切换。</p>
+<div class="pick-grid" id="pick"></div>
+
+<script>
+const THEMES = [
+  { id: "dark",     name: "深色 · 午夜蓝", note: "沉稳低调，长时间盯屏不累（默认）" },
+  { id: "light",    name: "浅色 · 极简白", note: "干净清爽，适合白天或明亮环境" },
+  { id: "glass",    name: "玻璃 · 极光",   note: "毛玻璃指标栏 + 极光渐变背景" },
+  { id: "terminal", name: "终端 · CRT 绿", note: "复古单色荧光 + 扫描线，极客风" },
+  { id: "bento",    name: "渐变 · 紫罗兰", note: "大数字渐变高亮，现代 Bento 风" },
+];
+
+function spark() {
+  const pts = [];
+  let y = 30;
+  for (let i = 0; i < 24; i++) {
+    y = Math.max(8, Math.min(52, y + Math.sin(i * 1.7) * 14 + Math.cos(i * 0.9) * 8));
+    pts.push((i * (100 / 23)).toFixed(1) + "," + y.toFixed(1));
+  }
+  return '<canvas class="kpi-spark" data-spark="1"></canvas>';
+}
+function drawSparks(root) {
+  root.querySelectorAll("canvas.kpi-spark").forEach(c => {
+    const w = c.clientWidth || 120, h = 36;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = w * dpr; c.height = h * dpr;
+    const ctx = c.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    let y = 20;
+    ctx.beginPath();
+    for (let i = 0; i < 24; i++) {
+      y = Math.max(5, Math.min(h - 5, y + Math.sin(i * 1.7) * 8 + Math.cos(i * 0.9) * 5));
+      const x = i / 23 * w;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = getComputedStyle(root).getPropertyValue("--accent").trim() || "#4da3ff";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  });
+}
+
+const grid = document.getElementById("pick");
+for (const t of THEMES) {
+  const el = document.createElement("div");
+  el.className = "pick";
+  el.innerHTML =
+    '<div class="preview t-' + t.id + '">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">' +
+        '<div class="dot"></div><b>Qwen3.8-27B</b><span class="sub">IQ3_S · ctx 160000</span></div>' +
+      '<div class="kpis">' +
+        '<div class="kpi"><div class="kpi-label">生成速度</div>' +
+          '<div class="kpi-value"><span class="num">64.8</span><span class="u">t/s</span></div>' +
+          '<div class="kpi-sub">累计平均 55.9 t/s</div>' +
+          spark() +
+        '</div>' +
+        '<div class="kpi"><div class="kpi-label">MTP 接受率</div>' +
+          '<div class="kpi-value"><span class="num">87.5</span><span class="u">%</span></div>' +
+          '<div class="kpi-sub">实时 88.2%</div>' +
+          spark() +
+        '</div>' +
+      '</div>' +
+      '<div class="section"><h2>GPU</h2>' +
+        '<table><thead><tr><th>GPU</th><th>温度</th><th>利用率</th><th>显存</th></tr></thead><tbody>' +
+        '<tr><td>GPU 0</td><td class="ok">48 °C</td>' +
+          '<td><span class="cellbar"><i style="width:72%"></i></span>72%</td>' +
+          '<td><span class="cellbar"><i style="width:87%;background:var(--purple)"></i></span>14200 / 16384 MiB</td></tr>' +
+        '</tbody></table>' +
+      '</div>' +
+    '</div>' +
+    '<div class="pick-foot">' +
+      '<div><div class="name">' + t.name + '</div><div class="note">' + t.note + '</div></div>' +
+      '<button class="use" data-t="' + t.id + '">使用此主题</button>' +
+    '</div>';
+  grid.appendChild(el);
+}
+grid.querySelectorAll(".preview").forEach(drawSparks);
+grid.addEventListener("click", e => {
+  const b = e.target.closest("button.use");
+  if (!b) return;
+  localStorage.setItem("theme", b.dataset.t);
+  location.href = "/";
+});
+</script>
+</body>
+</html>

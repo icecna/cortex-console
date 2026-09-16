@@ -1,0 +1,148 @@
+/* ============ 基础样式（扁平分区 · 一屏布局） ============ */
+:root {
+  --bg: #0a0e14; --card: #11161f; --border: #1e2633;
+  --text: #e8eef7; --dim: #8b98ab; --accent: #4da3ff;
+  --green: #3ddc84; --yellow: #ffc53d; --red: #ff5c5c; --purple: #b18cff;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  min-height: 100vh; background: var(--bg); color: var(--text); position: relative;
+  font: 14px/1.55 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  padding: 12px 22px 20px;
+}
+
+/* ---------- 顶栏 ---------- */
+header { display: flex; align-items: center; gap: 10px; padding: 4px 2px 10px; flex-wrap: wrap; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); flex: none;
+  box-shadow: 0 0 8px var(--green); }
+.dot.down { background: var(--red); box-shadow: 0 0 8px var(--red); }
+h1 { font-size: 19px; font-weight: 700; letter-spacing: .2px; }
+.sub { color: var(--dim); font-size: 13px; }
+a.link { color: var(--accent); text-decoration: none; font-size: 13px; }
+a.link:hover { text-decoration: underline; }
+select#theme {
+  background: var(--card); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 8px; font-size: 13px; cursor: pointer;
+}
+
+/* ---------- 主指标栏 ---------- */
+.kpis { display: flex; border: 1px solid var(--border); border-radius: var(--radius); }
+.kpi { flex: 1 1 0; min-width: 0; padding: 11px 16px 9px; border-right: 1px solid var(--border); }
+.kpi:last-child { border-right: none; }
+.kpi-label { font-size: 12px; color: var(--dim); letter-spacing: .5px; }
+.kpi-value { font-size: 38px; font-weight: 800; line-height: 1.15; letter-spacing: -.5px; white-space: nowrap; }
+.kpi-value .u { font-size: 14px; color: var(--dim); font-weight: 500; margin-left: 4px; letter-spacing: 0; }
+.kpi-value .num.dim { color: var(--dim); font-weight: 600; }
+.kpi-sub { font-size: 12px; color: var(--dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-spark { width: 100%; height: 30px; display: block; margin-top: 5px; }
+
+/* ---------- 三列分区 ---------- */
+.cols { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 28px; margin-top: 2px; }
+.col { min-width: 0; }
+.section { padding: 13px 2px 15px; border-bottom: 1px solid var(--border); }
+.col .section:last-child { border-bottom: none; }
+.section > h2 { font-size: 12px; color: var(--dim); text-transform: uppercase;
+  letter-spacing: 1.5px; margin-bottom: 9px; font-weight: 600; }
+.section > h2 .sub { text-transform: none; letter-spacing: 0; margin-left: 8px; }
+
+/* 标签-值 对 */
+.defs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 24px; }
+.def { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; min-width: 0; }
+.def .k { color: var(--dim); font-size: 13px; flex: none; }
+.def .v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.big { font-size: 22px; font-weight: 800; }
+
+/* 表格 */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--dim); font-size: 12px; font-weight: 500;
+  padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+
+/* 单元格内进度条 */
+.cellbar { display: inline-block; width: 64px; height: 7px; background: var(--border);
+  border-radius: 4px; overflow: hidden; vertical-align: middle; margin-right: 7px; }
+.cellbar i { display: block; height: 100%; background: var(--accent); }
+
+/* 独立进度条 */
+.bar { height: 9px; background: var(--border); border-radius: 5px; overflow: hidden; margin: 8px 0 2px; }
+.bar i { display: block; height: 100%; background: var(--accent); border-radius: 5px; transition: width .5s; }
+
+/* GPU 每卡一块 */
+.gpu { padding: 6px 0 10px; }
+.gpu + .gpu { border-top: 1px solid var(--border); }
+.gpu-head { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.gpu-head .sub { margin-left: 8px; }
+
+canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
+.legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
+.ok { color: var(--green); } .warn { color: var(--yellow); } .bad { color: var(--red); }
+.cmd { font: 12px/1.6 ui-monospace, monospace; color: var(--dim); word-break: break-all;
+  background: var(--card); padding: 7px 10px; border-radius: 6px; margin-top: 9px;
+  border: 1px solid var(--border); }
+.legend { font-size: 12px; color: var(--dim); margin-top: 5px; }
+
+/* ---------- 管理页 ---------- */
+.cols2 { grid-template-columns: 1fr 1fr; }
+.loginbox { max-width: 380px; margin: 12vh auto 0; padding: 26px 28px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); }
+.loginbox h2 { font-size: 16px; margin-bottom: 16px; }
+.inp { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 10px; font-size: 13px; width: 100%; }
+.inp:focus { outline: none; border-color: var(--accent); }
+.inp.grow { flex: 1 1 0; min-width: 0; width: auto; }
+.inp.num { width: 72px; flex: none; }
+.inp.sel { width: auto; min-width: 96px; flex: none; cursor: pointer; }
+.btn { background: var(--card); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 16px; font-size: 13px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.ok:hover { border-color: var(--green); color: var(--green); }
+.btn.bad:hover { border-color: var(--red); color: var(--red); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btnrow { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.testrow { display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
+.msg { font-size: 13px; margin-top: 9px; min-height: 1em; }
+.logview { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  font: 12px/1.6 ui-monospace, monospace; height: 420px; overflow-y: auto;
+  padding: 8px 10px; margin-top: 10px; white-space: pre-wrap; word-break: break-all; }
+.logview.small { height: 180px; }
+.ll.bad { color: var(--red); }
+.ll.warn { color: var(--yellow); }
+.chk { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--dim); }
+.ta { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px; font: 12px/1.6 ui-monospace, monospace;
+  resize: vertical; margin-top: 8px; }
+.ta:focus { outline: none; border-color: var(--accent); }
+
+/* 启动参数表单 */
+.fgroup { margin-top: 10px; }
+.frow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 7px; }
+.flab { font-size: 12px; color: var(--dim); flex: none; }
+.flab.block { display: block; margin-bottom: 2px; }
+.frow .inp.num { width: 84px; flex: none; }
+.chkrow .chk { margin-right: 14px; }
+
+/* 文件选择弹窗 */
+.modal { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); z-index: 100;
+  display: flex; align-items: center; justify-content: center; }
+.modal-box { width: 560px; max-width: 92vw; max-height: 70vh; background: var(--card);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  display: flex; flex-direction: column; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--dim); }
+.fm-list { overflow-y: auto; padding: 6px; }
+.fm-item { padding: 6px 10px; border-radius: 5px; font: 12px ui-monospace, monospace;
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fm-item:hover { background: var(--bg); color: var(--accent); }
+.fm-item.dir { color: var(--accent); }
+
+@media (max-width: 1250px) {
+  .cols { grid-template-columns: 1fr 1fr; }
+  .cols2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 800px) {
+  .cols { grid-template-columns: 1fr; }
+  .kpis { flex-wrap: wrap; }
+  .kpi { flex: 1 1 30%; border-bottom: 1px solid var(--border); }
+}
