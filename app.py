@@ -860,9 +860,39 @@ def list_files(path):
         parent = None
     return {"path": p, "parent": parent, "dirs": dirs, "files": files}
 
+SPEC_TYPES = {"none", "draft-simple", "draft-eagle3", "draft-mtp", "draft-dflash",
+              "draft-dspark", "ngram-simple", "ngram-map-k", "ngram-map-k4v",
+              "ngram-mod", "ngram-cache"}
+SPEC_NEED_DRAFT = {"draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark"}
+
+def list_devices():
+    """列出可用 GPU 设备（nvidia-smi 只读查询，不占用显存、不影响运行中的服务）。"""
+    out = []
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.free",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            for line in r.stdout.strip().splitlines():
+                parts = [x.strip() for x in line.split(",")]
+                if len(parts) >= 4:
+                    out.append({"id": "CUDA" + parts[0], "name": parts[1],
+                               "mem_total": int(parts[2]), "mem_free": int(parts[3])})
+    except Exception:
+        pass
+    return out
+
 def _check_cmd_files(cmd):
-    """保存前校验命令引用的模型文件是否存在于磁盘。"""
+    """保存前校验命令引用的模型文件是否存在于磁盘、投机解码配置是否有效。"""
     p = parse_cmd(cmd)
+    types = [t.strip() for t in (p.get("spec_type") or "").split(",") if t.strip()]
+    for t in types:
+        if t not in SPEC_TYPES:
+            return "未知投机解码类型: " + t
+    if "none" not in types and any(t in SPEC_NEED_DRAFT for t in types) and not p.get("draft"):
+        return ("投机解码类型 " + ",".join(t for t in types if t in SPEC_NEED_DRAFT)
+                + " 需要草稿模型文件（--spec-draft）")
     checks = [
         (p.get("model"), "模型文件 (-m)"),
         (p.get("mmproj"), "多模态投影器文件 (--mmproj)"),
@@ -995,6 +1025,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "未登录"})
                 return
             self._json(200, list_files(self._query().get("path", "")))
+            return
+        if path == "/api/admin/devices":
+            if not self._admin_token():
+                self._json(401, {"error": "未登录"})
+                return
+            self._json(200, {"devices": list_devices()})
             return
         if path == "/api/admin/logs":
             if not self._admin_token():

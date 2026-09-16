@@ -83,20 +83,32 @@
         </div>
         <div class="fgroup">
           <h3>MTP · 投机解码</h3>
-          <div class="frow">
+          <div class="frow" id="row_draft">
             <label class="flab" title="投机解码草稿模型文件">--spec-draft 草稿模型</label>
             <input class="inp grow" id="f_draft" readonly>
             <button class="btn" onclick="openFileBrowser('f_draft')">选择</button>
             <button class="btn" onclick="clearFile('f_draft')">清空</button>
           </div>
           <div class="fgrid">
-            <div class="fcell"><label class="flab" title="投机解码类型">--spec-type</label>
-              <select class="inp grow sel" id="f_spectype">
-                <option value="">不设置</option><option value="draft-mtp">draft-mtp</option><option value="draft-simple">draft-simple</option><option value="draft-eagle3">draft-eagle3</option><option value="draft-dflash">draft-dflash</option><option value="draft-dspark">draft-dspark</option><option value="ngram-simple">ngram-simple</option><option value="ngram-map-k">ngram-map-k</option><option value="ngram-map-k4v">ngram-map-k4v</option><option value="ngram-mod">ngram-mod</option><option value="ngram-cache">ngram-cache</option><option value="none">none</option>
-              </select>
+            <div class="fcell span2 col">
+              <label class="flab" title="投机解码类型（可多选，逗号分隔传入）">--spec-type</label>
+              <div class="specchk">
+                <label class="chk"><input type="checkbox" id="f_spec_none"> none</label>
+                <label class="chk"><input type="checkbox" id="f_spec_draft_mtp"> draft-mtp</label>
+                <label class="chk"><input type="checkbox" id="f_spec_draft_simple"> draft-simple</label>
+                <label class="chk"><input type="checkbox" id="f_spec_draft_eagle3"> draft-eagle3</label>
+                <label class="chk"><input type="checkbox" id="f_spec_draft_dflash"> draft-dflash</label>
+                <label class="chk"><input type="checkbox" id="f_spec_draft_dspark"> draft-dspark</label>
+                <label class="chk"><input type="checkbox" id="f_spec_ngram_simple"> ngram-simple</label>
+                <label class="chk"><input type="checkbox" id="f_spec_ngram_map_k"> ngram-map-k</label>
+                <label class="chk"><input type="checkbox" id="f_spec_ngram_map_k4v"> ngram-map-k4v</label>
+                <label class="chk"><input type="checkbox" id="f_spec_ngram_mod"> ngram-mod</label>
+                <label class="chk"><input type="checkbox" id="f_spec_ngram_cache"> ngram-cache</label>
+              </div>
             </div>
-            <div class="fcell"><label class="flab" title="MTP 投机解码最大草稿步数">--spec-draft-n-max</label><input class="inp grow" id="f_dmax" type="number"></div>
+            <div class="fcell" id="cell_dmax"><label class="flab" title="投机解码最大草稿步数">--spec-draft-n-max</label><input class="inp grow" id="f_dmax" type="number"></div>
           </div>
+          <div class="fhint" id="spec_hint"></div>
         </div>
         <div class="fgroup">
           <h3>采样与推理</h3>
@@ -148,7 +160,10 @@
         <div class="fgroup">
           <h3>多 GPU</h3>
           <div class="fgrid">
-            <div class="fcell"><label class="flab" title="指定使用的 GPU 设备">--device</label><input class="inp grow" id="f_device" placeholder="CUDA0,CUDA1"></div>
+            <div class="fcell span2 col">
+              <label class="flab" title="指定使用的 GPU 设备（可多选，逗号分隔传入）">--device 设备</label>
+              <div class="specchk" id="devchk"></div>
+            </div>
             <div class="fcell"><label class="flab" title="多 GPU 切分模式">--split-mode</label>
               <select class="inp grow sel" id="f_split">
                 <option value="">不设置</option><option value="tensor">tensor</option><option value="layer">layer</option><option value="row">row</option><option value="none">none</option>
@@ -366,9 +381,13 @@ const NUM_IDS = [["f_c","-c"],["f_ngl","-ngl"],["f_t","-t"],["f_np","-np"],
                  ["f_cram","--cache-ram"],["f_temp","--temp"],["f_topk","--top-k"],
                  ["f_topp","--top-p"],["f_minp","--min-p"]];
 const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_ctv","-ctv"],
-                 ["f_load","--load-mode"],["f_spectype","--spec-type"],["f_reasoning","--reasoning"]];
+                 ["f_load","--load-mode"],["f_reasoning","--reasoning"]];
+const SPEC_TYPES = ["none","draft-mtp","draft-simple","draft-eagle3","draft-dflash","draft-dspark",
+                    "ngram-simple","ngram-map-k","ngram-map-k4v","ngram-mod","ngram-cache"];
+const SPEC_NEED_DRAFT = ["draft-simple","draft-eagle3","draft-dflash","draft-dspark"];
+const specId = t => "f_spec_" + t.replace(/-/g, "_");
 const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","--no-mmproj-offload"]];
-const TXT_IDS = [["f_alias","--alias"],["f_device","--device"],["f_ts","--tensor-split"],
+const TXT_IDS = [["f_alias","--alias"],["f_ts","--tensor-split"],
                  ["f_host","--host"],["f_kwargs","--chat-template-kwargs"]];
 
 function buildCmd() {
@@ -376,9 +395,15 @@ function buildCmd() {
   const parts = [];
   if (v("f_model")) parts.push("-m", v("f_model"));
   if (v("f_mmproj")) parts.push("--mmproj", v("f_mmproj"));
-  if (v("f_draft")) parts.push("--spec-draft", v("f_draft"));
+  if (v("f_draft") && !$("f_draft").disabled) parts.push("--spec-draft", v("f_draft"));
   for (const [id, p] of NUM_IDS) { const x = v(id); if (x) parts.push(p, x); }
   for (const [id, p] of SEL_IDS) { const x = v(id); if (x) parts.push(p, x); }
+  const specActive = SPEC_TYPES.filter(t => t !== "none" && $(specId(t)).checked);
+  if ($("f_spec_none").checked || specActive.length) {
+    parts.push("--spec-type", $("f_spec_none").checked ? "none" : specActive.join(","));
+  }
+  const devActive = [...$("devchk").querySelectorAll("input:checked")].map(cb => cb.dataset.dev);
+  if (devActive.length) parts.push("--device", devActive.join(","));
   for (const [id, txt] of CHK_IDS) if ($(id).checked) parts.push(txt);
   for (const [id, p] of TXT_IDS) {
     let x = v(id);
@@ -403,7 +428,38 @@ function escHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function updateSpecUI() {
+  const active = SPEC_TYPES.filter(t => t !== "none" && $(specId(t)).checked);
+  const none = $("f_spec_none").checked;
+  const row = $("row_draft"), cell = $("cell_dmax"), hint = $("spec_hint");
+  const needDraft = active.some(t => SPEC_NEED_DRAFT.includes(t));
+  const hasMtp = active.includes("draft-mtp");
+  const hasNgram = active.some(t => t.startsWith("ngram-"));
+  const draftOn = needDraft || hasMtp;
+  row.classList.toggle("disabled", !draftOn);
+  row.querySelectorAll("input, button").forEach(el => { el.disabled = !draftOn; });
+  $("f_dmax").disabled = active.length === 0;
+  cell.classList.toggle("disabled", active.length === 0);
+  if (needDraft && !$("f_draft").value) {
+    hint.textContent = "⚠ 当前类型需要指定草稿模型文件（--spec-draft）";
+    hint.className = "fhint warn";
+  } else if (needDraft) {
+    hint.textContent = "当前类型使用指定的草稿模型";
+    hint.className = "fhint";
+  } else if (hasMtp) {
+    hint.textContent = "MTP 默认使用主模型内置 MTP 模块；若指定草稿模型则会改加载该文件";
+    hint.className = "fhint";
+  } else if (hasNgram) {
+    hint.textContent = "n-gram 方式不需要草稿模型";
+    hint.className = "fhint";
+  } else {
+    hint.textContent = none ? "投机解码已禁用（none）" : "未启用投机解码";
+    hint.className = "fhint";
+  }
+}
+
 function updatePreview() {
+  updateSpecUI();
   const el = $("cmd_preview"), note = $("cmd_diff_note");
   const newCmd = buildCmd();
   if (!newCmd) { el.textContent = "（空）"; note.style.display = "none"; return; }
@@ -437,21 +493,58 @@ function fillForm(p) {
                            ["f_topp","top_p"],["f_minp","min_p"]])
     $(id).value = p[key] || "";
   for (const [id, key] of [["f_fa","fa"],["f_split","split"],["f_ctk","ctk"],["f_ctv","ctv"],
-                           ["f_load","load_mode"],["f_spectype","spec_type"],["f_reasoning","reasoning"]]) {
+                           ["f_load","load_mode"],["f_reasoning","reasoning"]]) {
     const x = p[key] || "";
     $(id).value = [...$(id).options].some(o => o.value === x) ? x : "";
   }
+  SPEC_TYPES.forEach(t => { $(specId(t)).checked = false; });
+  const st = (p.spec_type || "").split(",").map(s => s.trim()).filter(s => SPEC_TYPES.includes(s));
+  if (st.includes("none")) st.length = 0;
+  st.forEach(t => { $(specId(t)).checked = true; });
   for (const [id, key] of [["f_metrics","metrics"],["f_nohost","no_host"],["f_nommo","no_mmproj_offload"]])
     $(id).checked = !!p[key];
-  for (const [id, key] of [["f_alias","alias"],["f_device","device"],["f_ts","tensor_split"],
+  for (const [id, key] of [["f_alias","alias"],["f_ts","tensor_split"],
                            ["f_host","host"],["f_kwargs","chat_kwargs"]])
     $(id).value = p[key] || "";
+  const devSet = new Set((p.device || "").split(",").map(s => s.trim()).filter(Boolean));
+  [...$("devchk").querySelectorAll("input")].forEach(cb => { cb.checked = devSet.has(cb.dataset.dev); });
   $("f_custom").value = p.custom || "";
   updatePreview();
 }
 
+let devList = [];
+async function loadDevices() {
+  if (!token) return;
+  try {
+    const j = await api("/api/admin/devices");
+    devList = j.devices || [];
+    const box = $("devchk");
+    box.innerHTML = "";
+    if (!devList.length) {
+      const el = document.createElement("span");
+      el.className = "fhint";
+      el.textContent = "（未检测到 GPU）";
+      box.appendChild(el);
+      return;
+    }
+    devList.forEach(d => {
+      const lab = document.createElement("label");
+      lab.className = "chk";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.dataset.dev = d.id;
+      cb.title = d.name + " · 空闲 " + d.mem_free + " / " + d.mem_total + " MiB";
+      lab.appendChild(cb);
+      lab.appendChild(document.createTextNode(" " + d.id + " · " + d.name));
+      cb.onchange = updatePreview;
+      box.appendChild(lab);
+    });
+  } catch (e) {}
+}
+
 async function loadCmd() {
   if (!token) return;
+  await loadDevices();
   try {
     const j = await api("/api/admin/cmd");
     cmdBinary = (j.parsed && j.parsed.binary) || "";
@@ -543,6 +636,14 @@ $("btn_cmd_save_restart").onclick = () => saveCmd(true);
  "f_model", "f_mmproj", "f_draft", "f_custom"]
   .forEach(id => $(id).addEventListener("input", updatePreview));
 CHK_IDS.forEach(([id]) => $(id).addEventListener("change", updatePreview));
+SPEC_TYPES.forEach(t => {
+  $(specId(t)).onchange = () => {
+    const noneEl = $("f_spec_none");
+    if (noneEl.checked) SPEC_TYPES.forEach(t2 => { if (t2 !== "none") $(specId(t2)).checked = false; });
+    else noneEl.checked = false;
+    updatePreview();
+  };
+});
 
 /* ---------- 文件选择弹窗 ---------- */
 function clearFile(id) {
