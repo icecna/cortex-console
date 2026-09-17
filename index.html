@@ -104,10 +104,10 @@
     </section>
 
     <section class="section">
-      <h2>日志速度 <span class="sub">journalctl</span></h2>
+      <h2>近期日志 <span class="sub">近 24 小时</span></h2>
       <div class="defs">
-        <div class="def"><span class="k">填充速度</span><span class="v" id="log_prompt">—</span></div>
-        <div class="def"><span class="k">生成速度</span><span class="v" id="log_gen">—</span></div>
+        <div class="def"><span class="k">错误</span><span class="v" id="log_err">—</span></div>
+        <div class="def"><span class="k">警告</span><span class="v" id="log_warn">—</span></div>
       </div>
     </section>
   </div>
@@ -304,15 +304,12 @@ function render(d) {
     $("gen_tok_max").textContent = fmt(M.tokens.max_seq);
   }
 
-  /* --- 日志速度 (journalctl，最近一次请求的结束值) --- */
-  if (LG) {
-    $("log_prompt").textContent = LG.prompt
-      ? fmt(LG.prompt.tps, 1) + " t/s · " + fmt(LG.prompt.tokens) + " tok / " + fmt(LG.prompt.ms) + " ms"
-      : "—";
-    $("log_gen").textContent = LG.gen
-      ? fmt(LG.gen.tps, 1) + " t/s · " + fmt(LG.gen.tokens) + " tok / " + fmt(LG.gen.ms / 1000, 1) + " s"
-      : "—";
-  }
+  /* --- 近期日志 (journalctl，最近 24 小时) --- */
+  const LE = L.log_err;
+  $("log_err").textContent = LE ? fmt(LE.err) : "—";
+  $("log_warn").textContent = LE ? fmt(LE.warn) : "—";
+  $("log_err").className = LE && LE.err > 0 ? "big bad" : "big ok";
+  $("log_warn").className = LE && LE.warn > 0 ? "big warn" : "big ok";
 
   /* --- GPU --- */
   let ghtml = "";

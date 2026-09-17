@@ -424,6 +424,23 @@ def llama_log_speeds():
     _log_speeds = (data, now)
     return data
 
+_log_err = None  # (data, ts)
+
+def log_error_counts(hours=24, cache=30):
+    """统计最近 N 小时 llama-server 日志里 错误(err 及以上) / 警告(纯 warning) 的行数（带缓存）。"""
+    global _log_err
+    now = time.monotonic()
+    if _log_err is not None and _log_err[0].get("hours") == hours and now - _log_err[1] < cache:
+        return _log_err[0]
+    def _count(prio):
+        out = _run(["journalctl", "-u", "llama-server", "-p", prio,
+                    "--since", "%d hours ago" % hours, "--no-pager", "-q"], timeout=8)
+        return len([l for l in out.splitlines() if l.strip()]) if out else 0
+    err = _count("err")
+    warn = max(0, _count("warning") - err)  # -p warning 含 err，减去得纯 warning
+    _log_err = ({"err": err, "warn": warn, "hours": hours}, now)
+    return _log_err[0]
+
 _props_cache, _props_ts = None, 0
 
 def llama_props():
@@ -501,7 +518,7 @@ def snapshot(m=None):
     return {
         "t": time.time(),
         "llama": {"up": m is not None, "props": props, "metrics": m, "proc": proc,
-                  "log": log},
+                  "log": log, "log_err": log_error_counts()},
         "cpu": {
             "usage": c,
             "cores": NPROC,
