@@ -808,6 +808,7 @@ NUM_FIELDS = [
     ("--seed", "seed"),
     ("--cache-reuse", "cache_reuse"), ("--threads-batch", "threads_batch"),
     ("--main-gpu", "main_gpu"), ("--n-cpu-moe", "n_cpu_moe"),
+    ("--rope-scale", "rope_scale"),
 ]
 # 下拉菜单：值必须是固定选项之一（选项列表见 admin.html）
 SEL_FIELDS = [
@@ -816,6 +817,7 @@ SEL_FIELDS = [
     ("--load-mode", "load_mode"), ("--spec-type", "spec_type"), ("--reasoning", "reasoning"),
     ("--reasoning-effort", "reasoning_effort"), ("--reasoning-format", "reasoning_format"),
     ("--fit", "fit"),
+    ("--numa", "numa"), ("--rope-scaling", "rope_scaling"),
 ]
 TEXT_FIELDS = [
     ("--alias", "alias"), ("--device", "device"), ("--tensor-split", "tensor_split"),
@@ -827,7 +829,8 @@ FILE_FIELDS = [("-m", "model"), ("--mmproj", "mmproj"), ("--model-draft", "draft
 DRAFT_FLAG = r"(?:--spec-draft-model|--model-draft|-md)"
 BOOL_FIELDS = [("--metrics", "metrics"), ("--no-host", "no_host"),
                ("--no-mmproj-offload", "no_mmproj_offload"),
-               ("--no-kv-offload", "no_kv_offload")]
+               ("--no-kv-offload", "no_kv_offload"),
+               ("--context-shift", "context_shift")]
 
 def parse_cmd(cmd):
     """把启动命令拆成表单字段，未识别的参数留在 custom。"""

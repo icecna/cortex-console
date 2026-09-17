@@ -210,9 +210,21 @@
               </select>
             </div>
             <div class="fcell"><label class="flab" title="每卡保留显存余量（MiB）">--fit-target</label><input class="inp grow" id="f_fit_target" placeholder="MiB"></div>
+            <div class="fcell"><label class="flab" title="NUMA 策略（多路 CPU 时）">--numa</label>
+              <select class="inp grow sel" id="f_numa">
+                <option value="">不设置</option><option value="distribute">distribute</option><option value="isolate">isolate</option><option value="numactl">numactl</option>
+              </select>
+            </div>
+            <div class="fcell"><label class="flab" title="RoPE 位置编码扩展方式（长上下文）">--rope-scaling</label>
+              <select class="inp grow sel" id="f_rope_scaling">
+                <option value="">不设置</option><option value="none">none</option><option value="linear">linear</option><option value="yarn">yarn</option>
+              </select>
+            </div>
+            <div class="fcell"><label class="flab" title="RoPE 扩展倍数（配合 --rope-scaling）">--rope-scale</label><input class="inp grow" id="f_rope_scale" type="number" step="0.5"></div>
           </div>
           <div class="frow chkrow">
             <label class="chk" title="关闭 KV 缓存卸载到 GPU（省显存）"><input type="checkbox" id="f_no_kv_offload"> --no-kv-offload</label>
+            <label class="chk" title="无限生成上下文滑动（超出上下文时丢弃最早 token）"><input type="checkbox" id="f_context_shift"> --context-shift</label>
           </div>
           <div class="fhint" id="batch_hint"></div>
         </div>
@@ -450,18 +462,18 @@ const NUM_IDS = [["f_c","-c"],["f_ngl","-ngl"],["f_t","-t"],["f_np","-np"],
                  ["f_frequency_penalty","--frequency-penalty"],["f_repeat_last_n","--repeat-last-n"],
                  ["f_seed","--seed"],
                  ["f_cache_reuse","--cache-reuse"],["f_threads_batch","--threads-batch"],
-                 ["f_main_gpu","--main-gpu"],["f_n_cpu_moe","--n-cpu-moe"]];
+                 ["f_main_gpu","--main-gpu"],["f_n_cpu_moe","--n-cpu-moe"],["f_rope_scale","--rope-scale"]];
 const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_ctv","-ctv"],
                  ["f_dctk","-ctkd"],["f_dctv","-ctvd"],
                  ["f_load","--load-mode"],["f_reasoning","--reasoning"],
                  ["f_reasoning_effort","--reasoning-effort"],["f_reasoning_format","--reasoning-format"],
-                 ["f_fit","--fit"]];
+                 ["f_fit","--fit"],["f_numa","--numa"],["f_rope_scaling","--rope-scaling"]];
 const SPEC_TYPES = ["none","draft-mtp","draft-simple","draft-eagle3","draft-dflash","draft-dspark",
                     "ngram-simple","ngram-map-k","ngram-map-k4v","ngram-mod","ngram-cache"];
 const SPEC_NEED_DRAFT = ["draft-simple","draft-eagle3","draft-dflash","draft-dspark"];
 const specId = t => "f_spec_" + t.replace(/-/g, "_");
 const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","--no-mmproj-offload"],
-                 ["f_no_kv_offload","--no-kv-offload"]];
+                 ["f_no_kv_offload","--no-kv-offload"],["f_context_shift","--context-shift"]];
 const TXT_IDS = [["f_alias","--alias"],["f_ts","--tensor-split"],
                  ["f_host","--host"],["f_kwargs","--chat-template-kwargs"],
                  ["f_chat_template","--chat-template"],["f_fit_target","--fit-target"]];
@@ -628,13 +640,13 @@ function fillForm(p) {
                            ["f_frequency_penalty","frequency_penalty"],["f_repeat_last_n","repeat_last_n"],
                            ["f_seed","seed"],
                            ["f_cache_reuse","cache_reuse"],["f_threads_batch","threads_batch"],
-                           ["f_main_gpu","main_gpu"],["f_n_cpu_moe","n_cpu_moe"]])
+                           ["f_main_gpu","main_gpu"],["f_n_cpu_moe","n_cpu_moe"],["f_rope_scale","rope_scale"]])
     $(id).value = p[key] || "";
   for (const [id, key] of [["f_fa","fa"],["f_split","split"],["f_ctk","ctk"],["f_ctv","ctv"],
                            ["f_dctk","draft_ctk"],["f_dctv","draft_ctv"],
                            ["f_load","load_mode"],["f_reasoning","reasoning"],
                            ["f_reasoning_effort","reasoning_effort"],["f_reasoning_format","reasoning_format"],
-                           ["f_fit","fit"]]) {
+                           ["f_fit","fit"],["f_numa","numa"],["f_rope_scaling","rope_scaling"]]) {
     const x = p[key] || "";
     $(id).value = [...$(id).options].some(o => o.value === x) ? x : "";
   }
@@ -643,7 +655,7 @@ function fillForm(p) {
   if (st.includes("none")) st.length = 0;
   st.forEach(t => { $(specId(t)).checked = true; });
   for (const [id, key] of [["f_metrics","metrics"],["f_nohost","no_host"],["f_nommo","no_mmproj_offload"],
-                           ["f_no_kv_offload","no_kv_offload"]])
+                           ["f_no_kv_offload","no_kv_offload"],["f_context_shift","context_shift"]])
     $(id).checked = !!p[key];
   for (const [id, key] of [["f_alias","alias"],["f_ts","tensor_split"],
                            ["f_host","host"],["f_kwargs","chat_kwargs"],
@@ -733,9 +745,11 @@ function fillFromRaw(cmd) {
               reasoning_budget: "", reasoning_effort: "", reasoning_format: "",
               repeat_penalty: "", presence_penalty: "", frequency_penalty: "", repeat_last_n: "", seed: "",
               cache_reuse: "", threads_batch: "", main_gpu: "", n_cpu_moe: "", fit: "", fit_target: "",
+              numa: "", rope_scaling: "", rope_scale: "",
               fa: "", split: "", ctk: "", ctv: "", draft_ctk: "", draft_ctv: "", load_mode: "", spec_type: "", reasoning: "",
               alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "", chat_template: "",
-              metrics: false, no_host: false, no_mmproj_offload: false, no_kv_offload: false, custom: "" };
+              metrics: false, no_host: false, no_mmproj_offload: false, no_kv_offload: false,
+              context_shift: false, custom: "" };
   let rest = cmd.replace(cmdBinary, "");
   const grab = (pat, key) => {
     const mm = rest.match(pat);
@@ -769,6 +783,9 @@ function fillFromRaw(cmd) {
   grab(/(?:^|\s)--n-cpu-moe\s+(\S+)/, "n_cpu_moe");
   grab(/(?:^|\s)--fit\s+(\S+)/, "fit");
   grab(/(?:^|\s)--fit-target\s+(\S+)/, "fit_target");
+  grab(/(?:^|\s)--numa\s+(\S+)/, "numa");
+  grab(/(?:^|\s)--rope-scaling\s+(\S+)/, "rope_scaling");
+  grab(/(?:^|\s)--rope-scale\s+(\S+)/, "rope_scale");
   grab(/(?:^|\s)-fa\s+(\S+)/, "fa");
   grab(/(?:^|\s)--split-mode\s+(\S+)/, "split");
   grab(/(?:^|\s)-ctk\s+(\S+)/, "ctk");
@@ -791,6 +808,7 @@ function fillFromRaw(cmd) {
   p.no_host = /(?:^|\s)--no-host(?=\s|$)/.test(rest);
   p.no_mmproj_offload = /(?:^|\s)--no-mmproj-offload(?=\s|$)/.test(rest);
   p.no_kv_offload = /(?:^|\s)--no-kv-offload(?=\s|$)/.test(rest);
+  p.context_shift = /(?:^|\s)--context-shift(?=\s|$)/.test(rest);
   p.custom = " ".join(rest.split());
   fillForm(p);
 }
