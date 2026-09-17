@@ -149,7 +149,7 @@
                 <option value="">不设置</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option><option value="iq4_nl">iq4_nl</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="f32">f32</option>
               </select>
             </div>
-            <div class="fcell"><label class="flab" title="KV 缓存保留在内存中的比例（0-100）">--cache-ram</label><input class="inp grow" id="f_cram" type="number"></div>
+            <div class="fcell"><label class="flab" title="KV 缓存上限（MiB，-1=不限，0=禁用）">--cache-ram</label><input class="inp grow" id="f_cram" type="number"></div>
             <div class="fcell"><label class="flab" title="模型加载方式">--load-mode</label>
               <select class="inp grow sel" id="f_load">
                 <option value="">不设置</option><option value="auto">auto</option><option value="none">none</option><option value="mmap">mmap</option><option value="mlock">mlock</option><option value="mmap+mlock">mmap+mlock</option><option value="dio">dio</option>
