@@ -87,8 +87,12 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 .fcell.col { flex-direction: column; align-items: stretch; gap: 6px; }
 .fcell.col .flab { max-width: none; }
 .specchk { display: flex; flex-wrap: wrap; gap: 4px 14px; }
-.fhint { font-size: 12px; color: var(--dim); margin-top: 8px; line-height: 1.5; }
-.fhint.warn { color: var(--yellow); }
+.fhint { font-size: 12px; color: var(--dim); margin-top: 8px; line-height: 1.5;
+  padding: 6px 10px; border-radius: 6px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); }
+.fhint.warn { color: var(--yellow); font-weight: 600; border-left-color: var(--yellow); }
+.fhint:empty { padding: 0; background: none; border: none; margin-top: 0; }
 .frow.disabled, .fcell.disabled { opacity: .45; }
 .legend { font-size: 12px; color: var(--dim); margin-top: 5px; }
 
@@ -169,9 +173,10 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 
 /* 启动参数表单 */
 .fgroup { margin-top: 10px; }
-.fgroup h3 { font-size: 11px; color: var(--dim); text-transform: uppercase;
-  letter-spacing: 1.2px; font-weight: 600; margin: 10px 0 2px; }
-.fgroup:first-of-type h3 { margin-top: 0; }
+.fgroup h3 { font-size: 13px; color: var(--text); letter-spacing: .3px;
+  font-weight: 700; margin: 16px 0 4px; line-height: 1.2;
+  padding-left: 10px; border-left: 3px solid var(--accent); }
+.fgroup:first-of-type h3 { margin-top: 2px; }
 .frow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 7px; }
 .flab { font-size: 12px; color: var(--dim); flex: none; }
 .flab.block { display: block; margin-bottom: 2px; }
