@@ -43,7 +43,8 @@ select#theme {
 .section { padding: 13px 2px 15px; border-bottom: 1px solid var(--border); }
 .col .section:last-child { border-bottom: none; }
 .section > h2 { font-size: 14px; color: var(--text); text-transform: uppercase;
-  letter-spacing: 1px; margin-bottom: 9px; font-weight: 700; }
+  letter-spacing: 1px; margin-bottom: 9px; font-weight: 700;
+  padding-left: 10px; border-left: 3px solid var(--accent); }
 .section > h2 .sub { text-transform: none; letter-spacing: 0; margin-left: 8px; }
 
 /* 标签-值 对 */
