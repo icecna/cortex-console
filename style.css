@@ -25,6 +25,9 @@ select#theme {
   background: var(--card); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 4px 8px; font-size: 13px; cursor: pointer;
 }
+/* 下拉列表是浏览器原生渲染，select 的 background 管不到它；
+   glass 主题 --card 半透明 + --text 浅色会导致白底浅字，给所有 option 指定不透明主题色 */
+select option { background: var(--bg); color: var(--text); }
 
 /* ---------- 主指标栏 ---------- */
 .kpis { display: flex; border: 1px solid var(--border); border-radius: var(--radius); }
