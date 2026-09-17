@@ -253,7 +253,14 @@
       </section>
 
       <section class="section">
-        <h2><span class="sico">⚠️</span>最近错误</h2>
+        <h2><span class="sico">⚠️</span>最近错误
+          <select class="h2sel" id="err_hours" title="只显示最近一段时间的日志">
+            <option value="1">最近 1 小时</option>
+            <option value="6">最近 6 小时</option>
+            <option value="24">最近 24 小时</option>
+            <option value="0">全部</option>
+          </select>
+        </h2>
         <div class="logview small" id="err_view"></div>
       </section>
     </div>
@@ -851,10 +858,11 @@ $("log_dl").onclick = e => {
   a.click();
 };
 
+$("err_hours").onchange = refreshErrors;
 async function refreshErrors() {
   if (!token) return;
   try {
-    const j = await api("/api/admin/logs?n=50&prio=err");
+    const j = await api("/api/admin/logs?n=50&prio=err&hours=" + $("err_hours").value);
     const v = $("err_view");
     v.innerHTML = "";
     (j.lines || []).forEach(l => addLine(v, l, 200));

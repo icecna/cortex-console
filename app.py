@@ -657,7 +657,7 @@ def health_info():
     return {"proc": proc_health(svc["pid"]) if svc.get("pid") else None,
             "api": probe_llama()}
 
-def logs_tail(n, prio):
+def logs_tail(n, prio, since_hours=None):
     if prio not in ("info", "warning", "err"):
         prio = "info"
     try:
@@ -665,8 +665,15 @@ def logs_tail(n, prio):
     except (TypeError, ValueError):
         n = 200
     n = max(1, min(5000, n))
-    return _run(["journalctl", "-u", "llama-server", "-n", str(n),
-                 "-p", prio, "--no-pager", "-q"], timeout=10)
+    cmd = ["journalctl", "-u", "llama-server", "-n", str(n), "-p", prio, "--no-pager", "-q"]
+    if since_hours:
+        try:
+            h = int(since_hours)
+        except (TypeError, ValueError):
+            h = 0
+        if h > 0:
+            cmd += ["--since", "%d hours ago" % h]
+    return _run(cmd, timeout=10)
 
 def _spec_counters():
     """读投机解码累计计数器（快速测试前后差值用）。"""
@@ -1052,7 +1059,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "未登录"})
                 return
             q = self._query()
-            self._json(200, {"lines": logs_tail(q.get("n", "200"), q.get("prio", "info")).splitlines()})
+            self._json(200, {"lines": logs_tail(q.get("n", "200"), q.get("prio", "info"), q.get("hours")).splitlines()})
             return
         if path == "/api/admin/logs/stream":
             if not self._admin_token():

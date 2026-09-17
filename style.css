@@ -136,6 +136,10 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 .inp.grow { flex: 1 1 0; min-width: 0; width: auto; }
 .inp.num { width: 72px; flex: none; }
 .inp.sel { width: auto; min-width: 96px; flex: none; cursor: pointer; }
+/* 卡片标题内的紧凑下拉（如“最近错误”时间范围） */
+.h2sel { margin-left: auto; background: var(--bg); color: var(--dim); border: 1px solid var(--border);
+  border-radius: 5px; padding: 3px 8px; font-size: 12px; cursor: pointer; }
+.h2sel:focus { outline: none; border-color: var(--accent); }
 .btn { background: var(--card); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 7px 16px; font-size: 13px; cursor: pointer;
   transition: border-color .15s, color .15s, background .15s, filter .15s, transform .05s; }
@@ -218,16 +222,27 @@ body.admin-page .cols2 {
   grid-template-rows: 1fr;
   align-items: stretch;
 }
-body.admin-page .cols2 > .col {
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 4px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+/* 两列撑满高度；滚动条放在卡片内部，列本身不滚动 */
+body.admin-page .cols2 > .col { min-height: 0; overflow: hidden; }
+
+/* 左列：标签栏固定顶部，当前面板自适应填满剩余高度 */
+body.admin-page .cols2 > .col:first-child > .tabpanel.active { flex: 1 1 auto; min-height: 0; }
+/* 单卡片面板：卡片填满并内部滚动（滚动条在卡片内） */
+body.admin-page .cols2 > .col:first-child > .tabpanel.active > .section:only-child {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
 }
-body.admin-page .cols2 > .col::-webkit-scrollbar { width: 8px; }
-body.admin-page .cols2 > .col::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-body.admin-page .cols2 > .col::-webkit-scrollbar-track { background: transparent; }
+body.admin-page .cols2 > .col:first-child > .tabpanel.active > .section:only-child::-webkit-scrollbar { width: 8px; }
+body.admin-page .cols2 > .col:first-child > .tabpanel.active > .section:only-child::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+body.admin-page .cols2 > .col:first-child > .tabpanel.active > .section:only-child::-webkit-scrollbar-track { background: transparent; }
+/* 多卡片面板（服务控制）：末卡片填满，其日志框自适应 */
+body.admin-page .cols2 > .col:first-child > .tabpanel.active > .section:last-child:not(:only-child) {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+}
+body.admin-page .cols2 > .col:first-child > .tabpanel.active > .section:last-child:not(:only-child) > .logview {
+  flex: 1 1 auto; min-height: 120px; height: auto;
+}
+
 /* 右列：实时日志框自适应填满，消除底部留白 */
 body.admin-page .cols2 > .col:last-child > .section:first-child {
   flex: 1 1 auto;
@@ -248,7 +263,11 @@ body.admin-page .cols2 > .col:last-child > .section:first-child > .logview {
   body.admin-page { height: auto; overflow: visible; display: block; }
   body.admin-page #admin_main { display: block; }
   body.admin-page .cols2 { grid-template-rows: auto; overflow: visible; }
-  body.admin-page .cols2 > .col { overflow: visible; padding-right: 0; }
+  body.admin-page .cols2 > .col { overflow: visible; }
+  body.admin-page .cols2 > .col:first-child > .tabpanel.active { flex: none; }
+  body.admin-page .cols2 > .col:first-child > .tabpanel.active > .section:only-child { flex: none; overflow: visible; }
+  body.admin-page .cols2 > .col:first-child > .tabpanel.active > .section:last-child:not(:only-child) { flex: none; display: block; }
+  body.admin-page .cols2 > .col:first-child > .tabpanel.active > .section:last-child:not(:only-child) > .logview { height: 180px; flex: none; }
   body.admin-page .cols2 > .col:last-child > .section:first-child { flex: none; display: block; }
   body.admin-page .cols2 > .col:last-child > .section:first-child > .logview { height: 420px; flex: none; }
 }
