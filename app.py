@@ -889,6 +889,35 @@ def auto_name(cmd):
         parts.append("MTP")
     return " · ".join(parts)
 
+def diff_brief(cmd, cur):
+    """返回 cmd 相对当前命令 cur 的差异参数简写（最小 flag + 值），无差异返回空串。
+    历史里缺失/关闭的参数用 ! 前缀标注（如 !--cache-reuse）。"""
+    pc = parse_cmd(cur) if cur else parse_cmd("")
+    pn = parse_cmd(cmd) if cmd else parse_cmd("")
+    parts = []
+    if (pc.get("binary") or "") != (pn.get("binary") or ""):
+        parts.append(os.path.basename(pn.get("binary") or "") or "（无主程序）")
+    for p, k in NUM_FIELDS + SEL_FIELDS + TEXT_FIELDS:
+        cv, nv = pc.get(k), pn.get(k)
+        if cv != nv:
+            if not nv:
+                parts.append("!" + p)  # 历史里没有该参数
+            elif k == "api_key":
+                parts.append(p)  # 敏感值不显示
+            else:
+                parts.append(p + " " + nv)
+    for p, k in FILE_FIELDS:
+        cv, nv = pc.get(k), pn.get(k)
+        if cv != nv:
+            parts.append(("!" + p) if not nv else (p + " " + os.path.basename(nv)))
+    for p, k in BOOL_FIELDS:
+        cv, nv = pc.get(k), pn.get(k)
+        if cv != nv:
+            parts.append(p if nv else "!" + p)
+    if (pc.get("custom") or "") != (pn.get("custom") or "") and pn.get("custom"):
+        parts.append(pn["custom"])
+    return " · ".join(parts)
+
 def cmd_info():
     cur = _read_unit_cmd()
     h = _load_hist()
@@ -899,6 +928,7 @@ def cmd_info():
     for x in h:
         if not x.get("name"):
             x["name"] = auto_name(x.get("cmd", ""))
+        x["diff"] = "" if x.get("cmd") == cur else diff_brief(x.get("cmd", ""), cur)
     return {"current": cur,
             "parsed": parse_cmd(cur) if cur else None,
             "history": h}

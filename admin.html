@@ -773,9 +773,11 @@ function renderHist() {
     const d = new Date(h.ts * 1000).toLocaleString("zh-CN");
     const isCur = (i === 0);
     const name = h.name || (h.cmd ? h.cmd.slice(0, 40) : "（未命名）");
+    const diff = h.diff || "";
     html += '<div class="hist-item' + (isCur ? " cur" : "") + '" data-i="' + i + '">'
       + '<div class="hist-main">'
       + '<div class="hist-name">' + escHtml(name) + '</div>'
+      + (diff ? '<div class="hist-diff">差异：' + escHtml(diff) + '</div>' : "")
       + '<div class="hist-meta">' + (isCur ? "当前 · " : "") + escHtml(d) + '</div>'
       + '</div>'
       + '<div class="hist-acts">'
