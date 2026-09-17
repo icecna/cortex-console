@@ -868,7 +868,7 @@ function fillFromRaw(cmd) {
   p.no_kv_offload = /(?:^|\s)--no-kv-offload(?=\s|$)/.test(rest);
   p.context_shift = /(?:^|\s)--context-shift(?=\s|$)/.test(rest);
   p.no_webui = /(?:^|\s)--no-webui(?=\s|$)/.test(rest);
-  p.custom = " ".join(rest.split());
+  p.custom = rest.split().join(" ");
   fillForm(p);
 }
 $("btn_cmd_revert").onclick = loadCmd;
