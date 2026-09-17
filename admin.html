@@ -200,6 +200,19 @@
                 <option value="">不设置</option><option value="auto">auto</option><option value="none">none</option><option value="mmap">mmap</option><option value="mlock">mlock</option><option value="mmap+mlock">mmap+mlock</option><option value="dio">dio</option>
               </select>
             </div>
+            <div class="fcell"><label class="flab" title="KV 缓存复用 chunk 数（社区共识 256，降低首 token 延迟）">--cache-reuse</label><input class="inp grow" id="f_cache_reuse" type="number"></div>
+            <div class="fcell"><label class="flab" title="批处理线程数（通常小于 -t）">--threads-batch</label><input class="inp grow" id="f_threads_batch" type="number"></div>
+            <div class="fcell"><label class="flab" title="主 GPU 索引（多卡时）">--main-gpu</label><input class="inp grow" id="f_main_gpu" type="number"></div>
+            <div class="fcell"><label class="flab" title="MoE 专家留在 CPU 的层数">--n-cpu-moe</label><input class="inp grow" id="f_n_cpu_moe" type="number"></div>
+            <div class="fcell"><label class="flab" title="自动适配显存（on/off）">--fit</label>
+              <select class="inp grow sel" id="f_fit">
+                <option value="">不设置</option><option value="on">on</option><option value="off">off</option>
+              </select>
+            </div>
+            <div class="fcell"><label class="flab" title="每卡保留显存余量（MiB）">--fit-target</label><input class="inp grow" id="f_fit_target" placeholder="MiB"></div>
+          </div>
+          <div class="frow chkrow">
+            <label class="chk" title="关闭 KV 缓存卸载到 GPU（省显存）"><input type="checkbox" id="f_no_kv_offload"> --no-kv-offload</label>
           </div>
           <div class="fhint" id="batch_hint"></div>
         </div>
@@ -435,19 +448,23 @@ const NUM_IDS = [["f_c","-c"],["f_ngl","-ngl"],["f_t","-t"],["f_np","-np"],
                  ["f_topp","--top-p"],["f_minp","--min-p"],["f_reasoning_budget","--reasoning-budget"],
                  ["f_repeat_penalty","--repeat-penalty"],["f_presence_penalty","--presence-penalty"],
                  ["f_frequency_penalty","--frequency-penalty"],["f_repeat_last_n","--repeat-last-n"],
-                 ["f_seed","--seed"]];
+                 ["f_seed","--seed"],
+                 ["f_cache_reuse","--cache-reuse"],["f_threads_batch","--threads-batch"],
+                 ["f_main_gpu","--main-gpu"],["f_n_cpu_moe","--n-cpu-moe"]];
 const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_ctv","-ctv"],
                  ["f_dctk","-ctkd"],["f_dctv","-ctvd"],
                  ["f_load","--load-mode"],["f_reasoning","--reasoning"],
-                 ["f_reasoning_effort","--reasoning-effort"],["f_reasoning_format","--reasoning-format"]];
+                 ["f_reasoning_effort","--reasoning-effort"],["f_reasoning_format","--reasoning-format"],
+                 ["f_fit","--fit"]];
 const SPEC_TYPES = ["none","draft-mtp","draft-simple","draft-eagle3","draft-dflash","draft-dspark",
                     "ngram-simple","ngram-map-k","ngram-map-k4v","ngram-mod","ngram-cache"];
 const SPEC_NEED_DRAFT = ["draft-simple","draft-eagle3","draft-dflash","draft-dspark"];
 const specId = t => "f_spec_" + t.replace(/-/g, "_");
-const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","--no-mmproj-offload"]];
+const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","--no-mmproj-offload"],
+                 ["f_no_kv_offload","--no-kv-offload"]];
 const TXT_IDS = [["f_alias","--alias"],["f_ts","--tensor-split"],
                  ["f_host","--host"],["f_kwargs","--chat-template-kwargs"],
-                 ["f_chat_template","--chat-template"]];
+                 ["f_chat_template","--chat-template"],["f_fit_target","--fit-target"]];
 
 function buildCmd() {
   const v = id => $(id).value.trim();
@@ -609,12 +626,15 @@ function fillForm(p) {
                            ["f_topp","top_p"],["f_minp","min_p"],["f_reasoning_budget","reasoning_budget"],
                            ["f_repeat_penalty","repeat_penalty"],["f_presence_penalty","presence_penalty"],
                            ["f_frequency_penalty","frequency_penalty"],["f_repeat_last_n","repeat_last_n"],
-                           ["f_seed","seed"]])
+                           ["f_seed","seed"],
+                           ["f_cache_reuse","cache_reuse"],["f_threads_batch","threads_batch"],
+                           ["f_main_gpu","main_gpu"],["f_n_cpu_moe","n_cpu_moe"]])
     $(id).value = p[key] || "";
   for (const [id, key] of [["f_fa","fa"],["f_split","split"],["f_ctk","ctk"],["f_ctv","ctv"],
                            ["f_dctk","draft_ctk"],["f_dctv","draft_ctv"],
                            ["f_load","load_mode"],["f_reasoning","reasoning"],
-                           ["f_reasoning_effort","reasoning_effort"],["f_reasoning_format","reasoning_format"]]) {
+                           ["f_reasoning_effort","reasoning_effort"],["f_reasoning_format","reasoning_format"],
+                           ["f_fit","fit"]]) {
     const x = p[key] || "";
     $(id).value = [...$(id).options].some(o => o.value === x) ? x : "";
   }
@@ -622,11 +642,12 @@ function fillForm(p) {
   const st = (p.spec_type || "").split(",").map(s => s.trim()).filter(s => SPEC_TYPES.includes(s));
   if (st.includes("none")) st.length = 0;
   st.forEach(t => { $(specId(t)).checked = true; });
-  for (const [id, key] of [["f_metrics","metrics"],["f_nohost","no_host"],["f_nommo","no_mmproj_offload"]])
+  for (const [id, key] of [["f_metrics","metrics"],["f_nohost","no_host"],["f_nommo","no_mmproj_offload"],
+                           ["f_no_kv_offload","no_kv_offload"]])
     $(id).checked = !!p[key];
   for (const [id, key] of [["f_alias","alias"],["f_ts","tensor_split"],
                            ["f_host","host"],["f_kwargs","chat_kwargs"],
-                           ["f_chat_template","chat_template"]])
+                           ["f_chat_template","chat_template"],["f_fit_target","fit_target"]])
     $(id).value = p[key] || "";
   const devSet = new Set((p.device || "").split(",").map(s => s.trim()).filter(Boolean));
   [...$("devchk").querySelectorAll("input")].forEach(cb => { cb.checked = devSet.has(cb.dataset.dev); });
@@ -711,9 +732,10 @@ function fillFromRaw(cmd) {
               port: "", draft_n_max: "", draft_ngl: "", cache_ram: "", temp: "", top_k: "", top_p: "", min_p: "",
               reasoning_budget: "", reasoning_effort: "", reasoning_format: "",
               repeat_penalty: "", presence_penalty: "", frequency_penalty: "", repeat_last_n: "", seed: "",
+              cache_reuse: "", threads_batch: "", main_gpu: "", n_cpu_moe: "", fit: "", fit_target: "",
               fa: "", split: "", ctk: "", ctv: "", draft_ctk: "", draft_ctv: "", load_mode: "", spec_type: "", reasoning: "",
               alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "", chat_template: "",
-              metrics: false, no_host: false, no_mmproj_offload: false, custom: "" };
+              metrics: false, no_host: false, no_mmproj_offload: false, no_kv_offload: false, custom: "" };
   let rest = cmd.replace(cmdBinary, "");
   const grab = (pat, key) => {
     const mm = rest.match(pat);
@@ -741,6 +763,12 @@ function fillFromRaw(cmd) {
   grab(/(?:^|\s)--frequency-penalty\s+(\S+)/, "frequency_penalty");
   grab(/(?:^|\s)--repeat-last-n\s+(\S+)/, "repeat_last_n");
   grab(/(?:^|\s)--seed\s+(\S+)/, "seed");
+  grab(/(?:^|\s)--cache-reuse\s+(\S+)/, "cache_reuse");
+  grab(/(?:^|\s)--threads-batch\s+(\S+)/, "threads_batch");
+  grab(/(?:^|\s)--main-gpu\s+(\S+)/, "main_gpu");
+  grab(/(?:^|\s)--n-cpu-moe\s+(\S+)/, "n_cpu_moe");
+  grab(/(?:^|\s)--fit\s+(\S+)/, "fit");
+  grab(/(?:^|\s)--fit-target\s+(\S+)/, "fit_target");
   grab(/(?:^|\s)-fa\s+(\S+)/, "fa");
   grab(/(?:^|\s)--split-mode\s+(\S+)/, "split");
   grab(/(?:^|\s)-ctk\s+(\S+)/, "ctk");
@@ -762,6 +790,7 @@ function fillFromRaw(cmd) {
   p.metrics = /(?:^|\s)--metrics(?=\s|$)/.test(rest);
   p.no_host = /(?:^|\s)--no-host(?=\s|$)/.test(rest);
   p.no_mmproj_offload = /(?:^|\s)--no-mmproj-offload(?=\s|$)/.test(rest);
+  p.no_kv_offload = /(?:^|\s)--no-kv-offload(?=\s|$)/.test(rest);
   p.custom = " ".join(rest.split());
   fillForm(p);
 }

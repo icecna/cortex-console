@@ -806,6 +806,8 @@ NUM_FIELDS = [
     ("--repeat-penalty", "repeat_penalty"), ("--presence-penalty", "presence_penalty"),
     ("--frequency-penalty", "frequency_penalty"), ("--repeat-last-n", "repeat_last_n"),
     ("--seed", "seed"),
+    ("--cache-reuse", "cache_reuse"), ("--threads-batch", "threads_batch"),
+    ("--main-gpu", "main_gpu"), ("--n-cpu-moe", "n_cpu_moe"),
 ]
 # 下拉菜单：值必须是固定选项之一（选项列表见 admin.html）
 SEL_FIELDS = [
@@ -813,17 +815,19 @@ SEL_FIELDS = [
     ("-ctkd", "draft_ctk"), ("-ctvd", "draft_ctv"),
     ("--load-mode", "load_mode"), ("--spec-type", "spec_type"), ("--reasoning", "reasoning"),
     ("--reasoning-effort", "reasoning_effort"), ("--reasoning-format", "reasoning_format"),
+    ("--fit", "fit"),
 ]
 TEXT_FIELDS = [
     ("--alias", "alias"), ("--device", "device"), ("--tensor-split", "tensor_split"),
     ("--host", "host"), ("--chat-template-kwargs", "chat_kwargs"),
-    ("--chat-template", "chat_template"),
+    ("--chat-template", "chat_template"), ("--fit-target", "fit_target"),
 ]
 FILE_FIELDS = [("-m", "model"), ("--mmproj", "mmproj"), ("--model-draft", "draft")]
 # 草稿模型文件的三种等价写法（--spec-draft-model / --model-draft / -md），解析时都识别
 DRAFT_FLAG = r"(?:--spec-draft-model|--model-draft|-md)"
 BOOL_FIELDS = [("--metrics", "metrics"), ("--no-host", "no_host"),
-               ("--no-mmproj-offload", "no_mmproj_offload")]
+               ("--no-mmproj-offload", "no_mmproj_offload"),
+               ("--no-kv-offload", "no_kv_offload")]
 
 def parse_cmd(cmd):
     """把启动命令拆成表单字段，未识别的参数留在 custom。"""
