@@ -803,6 +803,9 @@ NUM_FIELDS = [
     ("--cache-ram", "cache_ram"), ("--temp", "temp"), ("--top-k", "top_k"),
     ("--top-p", "top_p"), ("--min-p", "min_p"),
     ("--reasoning-budget", "reasoning_budget"),
+    ("--repeat-penalty", "repeat_penalty"), ("--presence-penalty", "presence_penalty"),
+    ("--frequency-penalty", "frequency_penalty"), ("--repeat-last-n", "repeat_last_n"),
+    ("--seed", "seed"),
 ]
 # 下拉菜单：值必须是固定选项之一（选项列表见 admin.html）
 SEL_FIELDS = [
