@@ -106,6 +106,21 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 #admin_main .section > h2 .sico { font-size: 15px; }
 #admin_main .section > h2 .sub { margin-left: 2px; }
 
+/* 管理页 · 左列标签页 */
+.tabbar { display: flex; gap: 6px; position: sticky; top: 8px; z-index: 20; background: var(--bg); }
+.tab {
+  flex: 1 1 0; min-width: 0;
+  background: var(--card); color: var(--dim);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 9px 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: color .15s, border-color .15s;
+}
+.tab:hover { color: var(--text); border-color: var(--accent); }
+.tab.active { color: var(--text); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.tabpanel { display: none; }
+.tabpanel.active { display: flex; flex-direction: column; gap: 14px; }
+
 /* 登录卡片 */
 .loginbox { max-width: 380px; margin: 12vh auto 0; padding: 28px 30px 24px;
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);

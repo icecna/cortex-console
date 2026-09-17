@@ -38,6 +38,12 @@
 <div id="admin_main" style="display:none">
   <div class="cols cols2">
     <div class="col">
+      <div class="tabbar">
+        <button class="tab active" data-tab="tab_params">⚙️ 启动参数</button>
+        <button class="tab" data-tab="tab_svc">🛠️ 服务控制</button>
+        <button class="tab" data-tab="tab_pw">🔑 密码修改</button>
+      </div>
+      <div class="tabpanel" id="tab_svc">
       <section class="section">
         <h2><span class="sico">🛠️</span>服务控制</h2>
         <div class="defs">
@@ -57,7 +63,18 @@
         </div>
         <div class="msg" id="svc_msg"></div>
       </section>
-
+      <section class="section">
+        <h2><span class="sico">⚡</span>快速测试</h2>
+        <div class="testrow">
+          <input class="inp grow" id="test_prompt" value="用一句话介绍你自己">
+          <input class="inp num" id="test_max" type="number" value="64" min="1" max="1024" title="生成 token 数">
+          <button class="btn primary" id="btn_test">生成</button>
+        </div>
+        <div class="msg" id="test_status"></div>
+        <div class="logview small" id="test_out"></div>
+      </section>
+      </div>
+      <div class="tabpanel active" id="tab_params">
       <section class="section">
         <h2><span class="sico">⚙️</span>启动参数</h2>
         <div class="fgroup">
@@ -202,18 +219,8 @@
         </div>
         <div class="msg" id="cmd_msg"></div>
       </section>
-
-      <section class="section">
-        <h2><span class="sico">⚡</span>快速测试</h2>
-        <div class="testrow">
-          <input class="inp grow" id="test_prompt" value="用一句话介绍你自己">
-          <input class="inp num" id="test_max" type="number" value="64" min="1" max="1024" title="生成 token 数">
-          <button class="btn primary" id="btn_test">生成</button>
-        </div>
-        <div class="msg" id="test_status"></div>
-        <div class="logview small" id="test_out"></div>
-      </section>
-
+      </div>
+      <div class="tabpanel" id="tab_pw">
       <section class="section">
         <h2><span class="sico">🔑</span>修改密码</h2>
         <div class="pwgrid">
@@ -224,6 +231,7 @@
         <div class="btnrow"><button class="btn" id="btn_pw">修改</button></div>
         <div class="msg" id="pw_status"></div>
       </section>
+      </div>
     </div>
 
     <div class="col">
@@ -273,6 +281,13 @@ $("theme").onchange = e => {
   localStorage.setItem("theme", e.target.value);
   document.body.className = "t-" + e.target.value;
 };
+
+/* ---------- 左列标签页 ---------- */
+function switchTab(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  document.querySelectorAll(".tabpanel").forEach(p => p.classList.toggle("active", p.id === name));
+}
+document.querySelectorAll(".tab").forEach(t => { t.onclick = () => switchTab(t.dataset.tab); });
 
 /* ---------- API ---------- */
 function api(path, body) {
