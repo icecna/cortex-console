@@ -44,7 +44,8 @@ select#theme {
 .col .section:last-child { border-bottom: none; }
 .section > h2 { font-size: 14px; color: var(--text); text-transform: uppercase;
   letter-spacing: 1px; margin-bottom: 9px; font-weight: 700;
-  padding-left: 10px; border-left: 3px solid var(--accent); }
+  padding: 5px 12px 5px 10px; border-left: 3px solid var(--accent);
+  background: var(--card); border-radius: 0 4px 4px 0; }
 .section > h2 .sub { text-transform: none; letter-spacing: 0; margin-left: 8px; }
 
 /* 标签-值 对 */
