@@ -91,6 +91,19 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 .cmd-diff-cur { color: var(--red); text-decoration: line-through; }
 .cmd-diff-arrow { color: var(--dim); }
 .cmd-diff-new { color: var(--green); font-weight: 600; }
+.hist { margin-top: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); overflow: hidden; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.hist-title { font-weight: 600; font-size: 13px; }
+.hist-list { max-height: 280px; overflow-y: auto; }
+.hist-empty { padding: 14px 10px; font-size: 12px; color: var(--dim); text-align: center; }
+.hist-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.hist-item:last-child { border-bottom: none; }
+.hist-item.cur { border-left: 3px solid var(--accent); }
+.hist-main { flex: 1; min-width: 0; }
+.hist-name { font-size: 13px; font-weight: 500; word-break: break-all; }
+.hist-meta { font-size: 11px; color: var(--dim); margin-top: 2px; }
+.hist-acts { display: flex; gap: 5px; flex-shrink: 0; }
+.btn.sm { padding: 3px 9px; font-size: 12px; border-radius: 5px; }
 .fcell.col { flex-direction: column; align-items: stretch; gap: 6px; }
 .fcell.col .flab { max-width: none; }
 .specchk { display: flex; flex-wrap: wrap; gap: 4px 14px; }

@@ -281,9 +281,12 @@
         <div class="cmd" id="cmd_preview"></div>
         <div class="cmd-diff-note" id="cmd_diff_note" style="display:none"></div>
         <div class="cmd-diff" id="cmd_diff" style="display:none"></div>
-        <div class="btnrow">
-          <select class="inp grow" id="cmd_hist" title="历史命令"></select>
-          <button class="btn" id="btn_cmd_revert">恢复当前</button>
+        <div class="hist">
+          <div class="hist-head">
+            <span class="hist-title">历史配置</span>
+            <button class="btn sm" id="btn_cmd_revert">恢复当前</button>
+          </div>
+          <div class="hist-list" id="hist_list"></div>
         </div>
         <div class="btnrow">
           <button class="btn primary" id="btn_cmd_save">保存</button>
@@ -758,17 +761,30 @@ async function loadCmd() {
     cmdCurrent = j.current || "";
     cmdHist = j.history || [];
     if (j.parsed) fillForm(j.parsed);
-    const sel = $("cmd_hist");
-    sel.innerHTML = "";
-    cmdHist.forEach((h, i) => {
-      const o = document.createElement("option");
-      o.value = i;
-      const d = new Date(h.ts * 1000).toLocaleString("zh-CN");
-      o.textContent = (i === 0 ? "当前 · " : "") + d + " · " +
-        h.cmd.slice(0, 50) + (h.cmd.length > 50 ? "…" : "");
-      sel.appendChild(o);
-    });
+    renderHist();
   } catch (e) {}
+}
+function renderHist() {
+  const box = $("hist_list");
+  if (!box) return;
+  if (!cmdHist.length) { box.innerHTML = '<div class="hist-empty">暂无历史记录</div>'; return; }
+  let html = "";
+  cmdHist.forEach((h, i) => {
+    const d = new Date(h.ts * 1000).toLocaleString("zh-CN");
+    const isCur = (i === 0);
+    const name = h.name || (h.cmd ? h.cmd.slice(0, 40) : "（未命名）");
+    html += '<div class="hist-item' + (isCur ? " cur" : "") + '" data-i="' + i + '">'
+      + '<div class="hist-main">'
+      + '<div class="hist-name">' + escHtml(name) + '</div>'
+      + '<div class="hist-meta">' + (isCur ? "当前 · " : "") + escHtml(d) + '</div>'
+      + '</div>'
+      + '<div class="hist-acts">'
+      + (isCur ? "" : '<button class="btn sm" data-act="load">加载</button>'
+        + '<button class="btn sm" data-act="rename">改名</button>'
+        + '<button class="btn sm danger" data-act="del">删除</button>')
+      + '</div></div>';
+  });
+  box.innerHTML = html;
 }
 
 async function saveCmd(restart) {
@@ -784,10 +800,38 @@ async function saveCmd(restart) {
     refreshService();
   } catch (e) { $("cmd_msg").textContent = e.message; $("cmd_msg").className = "msg bad"; }
 }
-$("cmd_hist").onchange = e => {
-  const h = cmdHist[+e.target.value];
-  if (h) { fillFromRaw(h.cmd); showCmdDiff(h.cmd); }
-};
+$("hist_list").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const item = btn.closest(".hist-item");
+  const h = cmdHist[+item.dataset.i];
+  if (!h) return;
+  const act = btn.dataset.act;
+  if (act === "load") { fillFromRaw(h.cmd); showCmdDiff(h.cmd); }
+  else if (act === "rename") { renameHistItem(h); }
+  else if (act === "del") { deleteHistItem(h); }
+});
+async function renameHistItem(h) {
+  const name = prompt("输入新名称", h.name || "");
+  if (name === null) return;
+  const nm = name.trim();
+  if (!nm) { alert("名称不能为空"); return; }
+  try {
+    const j = await api("/api/admin/cmd/hist/rename", { cmd: h.cmd, name: nm });
+    if (!j.ok) { alert(j.error || "改名失败"); return; }
+    cmdHist = j.history || [];
+    renderHist();
+  } catch (e) { alert(e.message); }
+}
+async function deleteHistItem(h) {
+  if (!confirm("确定删除该历史记录？\n" + (h.name || h.cmd.slice(0, 60)))) return;
+  try {
+    const j = await api("/api/admin/cmd/hist/delete", { cmd: h.cmd });
+    if (!j.ok) { alert(j.error || "删除失败"); return; }
+    cmdHist = j.history || [];
+    renderHist();
+  } catch (e) { alert(e.message); }
+}
 function fillFromRaw(cmd) {
   // 前端粗解析：只用于历史回填，精确解析以后端为准
   const m = cmd.match(/(\S+)\s/);

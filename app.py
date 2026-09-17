@@ -862,15 +862,71 @@ def parse_cmd(cmd):
     d["custom"] = " ".join(rest.split())
     return d
 
+def auto_name(cmd):
+    """根据启动命令自动生成可读名称：llama+版本 · 主模型 · VISION · MTP。"""
+    if not cmd or not cmd.strip():
+        return "（空）"
+    d = parse_cmd(cmd)
+    parts = []
+    binary = d.get("binary") or ""
+    m = re.search(r"llama[.\-]?cpp[-_]?v?(\d+(?:\.\d+)*)", binary)
+    if m:
+        vpre = "v" if re.search(r"v\d", binary[m.start():m.end()]) else ""
+        parts.append("llama-" + vpre + m.group(1))
+    else:
+        m2 = re.search(r"/([^/]+?)/build", binary)
+        parts.append("llama" + ("-" + m2.group(1) if m2 else ""))
+    model = d.get("model") or ""
+    if model:
+        name = os.path.basename(model)
+        name = re.sub(r"\.gguf$", "", name, flags=re.I)
+        name = re.sub(r"-(UD-)?[QFB]\d+[A-Z0-9_]*$", "", name)
+        if name:
+            parts.append(name)
+    if d.get("mmproj"):
+        parts.append("VISION")
+    if d.get("draft") or "draft-mtp" in (d.get("spec_type") or ""):
+        parts.append("MTP")
+    return " · ".join(parts)
+
 def cmd_info():
     cur = _read_unit_cmd()
     h = _load_hist()
     if cur and (not h or h[0].get("cmd") != cur):
         # 当前命令不在历史顶部时置顶显示（不落盘）
         h = [{"ts": time.time(), "cmd": cur}] + [x for x in h if x.get("cmd") != cur]
+    h = h[:HIST_LEN]
+    for x in h:
+        if not x.get("name"):
+            x["name"] = auto_name(x.get("cmd", ""))
     return {"current": cur,
             "parsed": parse_cmd(cur) if cur else None,
-            "history": h[:HIST_LEN]}
+            "history": h}
+
+def hist_rename(cmd, name):
+    """按命令内容定位历史记录并改名（当前置顶项不落盘，不可改名）。"""
+    name = (name or "").strip()
+    if not cmd or not name:
+        return {"ok": False, "error": "命令或名称为空"}
+    h = _load_hist()
+    for x in h:
+        if x.get("cmd") == cmd:
+            x["name"] = name
+            _save_hist(h)
+            return {"ok": True, "history": cmd_info()["history"]}
+    return {"ok": False, "error": "未找到该历史记录"}
+
+def hist_delete(cmd):
+    """按命令内容定位历史记录并删除（当前置顶项不落盘，不可删除）。"""
+    if not cmd:
+        return {"ok": False, "error": "命令为空"}
+    h = _load_hist()
+    for i, x in enumerate(h):
+        if x.get("cmd") == cmd:
+            h.pop(i)
+            _save_hist(h)
+            return {"ok": True, "history": cmd_info()["history"]}
+    return {"ok": False, "error": "未找到该历史记录"}
 
 def cmd_diff(cmd):
     """对比当前命令与给定命令，返回逐字段差异（选择历史命令时展示用）。"""
@@ -981,7 +1037,7 @@ def cmd_save(new_cmd, restart=False):
         return {"ok": False, "error": err}
     if cur:
         h = _load_hist()
-        h = [{"ts": time.time(), "cmd": cur}] + [x for x in h if x.get("cmd") != cur]
+        h = [{"ts": time.time(), "cmd": cur, "name": auto_name(cur)}] + [x for x in h if x.get("cmd") != cur]
         _save_hist(h[:HIST_LEN])
     info = None
     if restart:
@@ -1163,6 +1219,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/cmd":
             self._json(200, cmd_save(data.get("cmd", ""), bool(data.get("restart"))))
+            return
+        if path == "/api/admin/cmd/hist/rename":
+            self._json(200, hist_rename(data.get("cmd", ""), data.get("name", "")))
+            return
+        if path == "/api/admin/cmd/hist/delete":
+            self._json(200, hist_delete(data.get("cmd", "")))
             return
         if path == "/api/admin/password":
             err = change_password(data.get("old", ""), data.get("new", ""))
