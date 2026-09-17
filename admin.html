@@ -250,10 +250,15 @@
             <div class="fcell"><label class="flab" title="监听地址">--host</label><input class="inp grow" id="f_host" placeholder="0.0.0.0"></div>
             <div class="fcell"><label class="flab" title="服务监听端口">--port 端口</label><input class="inp grow" id="f_port" type="number"></div>
             <div class="fcell"><label class="flab" title="模型别名（/v1/models 中显示）">--alias</label><input class="inp grow" id="f_alias" placeholder="模型别名"></div>
+            <div class="fcell"><label class="flab" title="API 密钥认证（对外暴露时建议设置）">--api-key</label><input class="inp grow" id="f_api_key" type="password" placeholder="API 密钥" autocomplete="off"></div>
+            <div class="fcell"><label class="flab" title="HTTP 请求处理线程数">--threads-http</label><input class="inp grow" id="f_threads_http" type="number"></div>
+            <div class="fcell"><label class="flab" title="读/写超时（秒）">--timeout</label><input class="inp grow" id="f_timeout" type="number"></div>
+            <div class="fcell"><label class="flab" title="空闲 N 秒后卸载模型省显存">--sleep-idle-seconds</label><input class="inp grow" id="f_sleep_idle_seconds" type="number"></div>
           </div>
           <div class="frow chkrow">
             <label class="chk" title="不绑定 host（仅本地访问）"><input type="checkbox" id="f_nohost"> --no-host</label>
             <label class="chk" title="启用 /metrics 指标端点"><input type="checkbox" id="f_metrics"> --metrics</label>
+            <label class="chk" title="关闭内置 Web UI（减少攻击面）"><input type="checkbox" id="f_no_webui"> --no-webui</label>
           </div>
         </div>
         <div class="fgroup">
@@ -462,7 +467,9 @@ const NUM_IDS = [["f_c","-c"],["f_ngl","-ngl"],["f_t","-t"],["f_np","-np"],
                  ["f_frequency_penalty","--frequency-penalty"],["f_repeat_last_n","--repeat-last-n"],
                  ["f_seed","--seed"],
                  ["f_cache_reuse","--cache-reuse"],["f_threads_batch","--threads-batch"],
-                 ["f_main_gpu","--main-gpu"],["f_n_cpu_moe","--n-cpu-moe"],["f_rope_scale","--rope-scale"]];
+                 ["f_main_gpu","--main-gpu"],["f_n_cpu_moe","--n-cpu-moe"],["f_rope_scale","--rope-scale"],
+                 ["f_threads_http","--threads-http"],["f_timeout","--timeout"],
+                 ["f_sleep_idle_seconds","--sleep-idle-seconds"]];
 const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_ctv","-ctv"],
                  ["f_dctk","-ctkd"],["f_dctv","-ctvd"],
                  ["f_load","--load-mode"],["f_reasoning","--reasoning"],
@@ -473,10 +480,12 @@ const SPEC_TYPES = ["none","draft-mtp","draft-simple","draft-eagle3","draft-dfla
 const SPEC_NEED_DRAFT = ["draft-simple","draft-eagle3","draft-dflash","draft-dspark"];
 const specId = t => "f_spec_" + t.replace(/-/g, "_");
 const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","--no-mmproj-offload"],
-                 ["f_no_kv_offload","--no-kv-offload"],["f_context_shift","--context-shift"]];
+                 ["f_no_kv_offload","--no-kv-offload"],["f_context_shift","--context-shift"],
+                 ["f_no_webui","--no-webui"]];
 const TXT_IDS = [["f_alias","--alias"],["f_ts","--tensor-split"],
                  ["f_host","--host"],["f_kwargs","--chat-template-kwargs"],
-                 ["f_chat_template","--chat-template"],["f_fit_target","--fit-target"]];
+                 ["f_chat_template","--chat-template"],["f_fit_target","--fit-target"],
+                 ["f_api_key","--api-key"]];
 
 function buildCmd() {
   const v = id => $(id).value.trim();
@@ -498,6 +507,7 @@ function buildCmd() {
     if (!x || $(id).disabled) continue;
     if (id === "f_kwargs" && x.includes("{") && !x.startsWith("'")) x = "'" + x + "'";
     if (id === "f_chat_template" && x.includes(" ") && !x.startsWith("'")) x = "'" + x + "'";
+    if (id === "f_api_key" && x.includes(" ") && !x.startsWith("'")) x = "'" + x + "'";
     parts.push(p, x);
   }
   const custom = v("f_custom");
@@ -640,7 +650,9 @@ function fillForm(p) {
                            ["f_frequency_penalty","frequency_penalty"],["f_repeat_last_n","repeat_last_n"],
                            ["f_seed","seed"],
                            ["f_cache_reuse","cache_reuse"],["f_threads_batch","threads_batch"],
-                           ["f_main_gpu","main_gpu"],["f_n_cpu_moe","n_cpu_moe"],["f_rope_scale","rope_scale"]])
+                           ["f_main_gpu","main_gpu"],["f_n_cpu_moe","n_cpu_moe"],["f_rope_scale","rope_scale"],
+                           ["f_threads_http","threads_http"],["f_timeout","timeout"],
+                           ["f_sleep_idle_seconds","sleep_idle_seconds"]])
     $(id).value = p[key] || "";
   for (const [id, key] of [["f_fa","fa"],["f_split","split"],["f_ctk","ctk"],["f_ctv","ctv"],
                            ["f_dctk","draft_ctk"],["f_dctv","draft_ctv"],
@@ -655,11 +667,13 @@ function fillForm(p) {
   if (st.includes("none")) st.length = 0;
   st.forEach(t => { $(specId(t)).checked = true; });
   for (const [id, key] of [["f_metrics","metrics"],["f_nohost","no_host"],["f_nommo","no_mmproj_offload"],
-                           ["f_no_kv_offload","no_kv_offload"],["f_context_shift","context_shift"]])
+                           ["f_no_kv_offload","no_kv_offload"],["f_context_shift","context_shift"],
+                           ["f_no_webui","no_webui"]])
     $(id).checked = !!p[key];
   for (const [id, key] of [["f_alias","alias"],["f_ts","tensor_split"],
                            ["f_host","host"],["f_kwargs","chat_kwargs"],
-                           ["f_chat_template","chat_template"],["f_fit_target","fit_target"]])
+                           ["f_chat_template","chat_template"],["f_fit_target","fit_target"],
+                           ["f_api_key","api_key"]])
     $(id).value = p[key] || "";
   const devSet = new Set((p.device || "").split(",").map(s => s.trim()).filter(Boolean));
   [...$("devchk").querySelectorAll("input")].forEach(cb => { cb.checked = devSet.has(cb.dataset.dev); });
@@ -746,10 +760,11 @@ function fillFromRaw(cmd) {
               repeat_penalty: "", presence_penalty: "", frequency_penalty: "", repeat_last_n: "", seed: "",
               cache_reuse: "", threads_batch: "", main_gpu: "", n_cpu_moe: "", fit: "", fit_target: "",
               numa: "", rope_scaling: "", rope_scale: "",
+              threads_http: "", timeout: "", sleep_idle_seconds: "", api_key: "",
               fa: "", split: "", ctk: "", ctv: "", draft_ctk: "", draft_ctv: "", load_mode: "", spec_type: "", reasoning: "",
               alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "", chat_template: "",
               metrics: false, no_host: false, no_mmproj_offload: false, no_kv_offload: false,
-              context_shift: false, custom: "" };
+              context_shift: false, no_webui: false, custom: "" };
   let rest = cmd.replace(cmdBinary, "");
   const grab = (pat, key) => {
     const mm = rest.match(pat);
@@ -786,6 +801,10 @@ function fillFromRaw(cmd) {
   grab(/(?:^|\s)--numa\s+(\S+)/, "numa");
   grab(/(?:^|\s)--rope-scaling\s+(\S+)/, "rope_scaling");
   grab(/(?:^|\s)--rope-scale\s+(\S+)/, "rope_scale");
+  grab(/(?:^|\s)--threads-http\s+(\S+)/, "threads_http");
+  grab(/(?:^|\s)--timeout\s+(\S+)/, "timeout");
+  grab(/(?:^|\s)--sleep-idle-seconds\s+(\S+)/, "sleep_idle_seconds");
+  grab(/(?:^|\s)--api-key\s+('(?:[^']*)'|\S+)/, "api_key");
   grab(/(?:^|\s)-fa\s+(\S+)/, "fa");
   grab(/(?:^|\s)--split-mode\s+(\S+)/, "split");
   grab(/(?:^|\s)-ctk\s+(\S+)/, "ctk");
@@ -809,6 +828,7 @@ function fillFromRaw(cmd) {
   p.no_mmproj_offload = /(?:^|\s)--no-mmproj-offload(?=\s|$)/.test(rest);
   p.no_kv_offload = /(?:^|\s)--no-kv-offload(?=\s|$)/.test(rest);
   p.context_shift = /(?:^|\s)--context-shift(?=\s|$)/.test(rest);
+  p.no_webui = /(?:^|\s)--no-webui(?=\s|$)/.test(rest);
   p.custom = " ".join(rest.split());
   fillForm(p);
 }

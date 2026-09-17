@@ -809,6 +809,8 @@ NUM_FIELDS = [
     ("--cache-reuse", "cache_reuse"), ("--threads-batch", "threads_batch"),
     ("--main-gpu", "main_gpu"), ("--n-cpu-moe", "n_cpu_moe"),
     ("--rope-scale", "rope_scale"),
+    ("--threads-http", "threads_http"), ("--timeout", "timeout"),
+    ("--sleep-idle-seconds", "sleep_idle_seconds"),
 ]
 # 下拉菜单：值必须是固定选项之一（选项列表见 admin.html）
 SEL_FIELDS = [
@@ -823,6 +825,7 @@ TEXT_FIELDS = [
     ("--alias", "alias"), ("--device", "device"), ("--tensor-split", "tensor_split"),
     ("--host", "host"), ("--chat-template-kwargs", "chat_kwargs"),
     ("--chat-template", "chat_template"), ("--fit-target", "fit_target"),
+    ("--api-key", "api_key"),
 ]
 FILE_FIELDS = [("-m", "model"), ("--mmproj", "mmproj"), ("--model-draft", "draft")]
 # 草稿模型文件的三种等价写法（--spec-draft-model / --model-draft / -md），解析时都识别
@@ -830,7 +833,8 @@ DRAFT_FLAG = r"(?:--spec-draft-model|--model-draft|-md)"
 BOOL_FIELDS = [("--metrics", "metrics"), ("--no-host", "no_host"),
                ("--no-mmproj-offload", "no_mmproj_offload"),
                ("--no-kv-offload", "no_kv_offload"),
-               ("--context-shift", "context_shift")]
+               ("--context-shift", "context_shift"),
+               ("--no-webui", "no_webui")]
 
 def parse_cmd(cmd):
     """把启动命令拆成表单字段，未识别的参数留在 custom。"""
