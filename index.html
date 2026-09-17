@@ -82,6 +82,13 @@
         <div class="def"><span class="k">进程内存</span><span class="v" id="svc_rss">—</span></div>
         <div class="def"><span class="k">运行时间</span><span class="v" id="svc_up">—</span></div>
       </div>
+      <div class="subhead">生成统计</div>
+      <div class="defs">
+        <div class="def"><span class="k">Prompt tokens</span><span class="v" id="gen_tok_prompt">—</span></div>
+        <div class="def"><span class="k">缓存命中</span><span class="v" id="gen_tok_cached">—</span></div>
+        <div class="def"><span class="k">生成 tokens</span><span class="v" id="gen_tok_pred">—</span></div>
+        <div class="def"><span class="k">最大序列长度</span><span class="v" id="gen_tok_max">—</span></div>
+      </div>
       <div class="cmd" id="svc_cmd">—</div>
     </section>
 
@@ -93,10 +100,6 @@
         <div class="def"><span class="k">验证步数</span><span class="v" id="mtp_drafts">—</span></div>
         <div class="def"><span class="k">草稿 tokens</span><span class="v" id="mtp_drafttok">—</span></div>
         <div class="def"><span class="k">被接受 tokens</span><span class="v" id="mtp_acc">—</span></div>
-        <div class="def"><span class="k">Prompt tokens</span><span class="v" id="gen_tok_prompt">—</span></div>
-        <div class="def"><span class="k">缓存命中</span><span class="v" id="gen_tok_cached">—</span></div>
-        <div class="def"><span class="k">生成 tokens</span><span class="v" id="gen_tok_pred">—</span></div>
-        <div class="def"><span class="k">最大序列长度</span><span class="v" id="gen_tok_max">—</span></div>
       </div>
       <canvas class="chart" id="mtp_chart"></canvas>
     </section>
@@ -139,7 +142,6 @@
         <div class="def"><span class="k">CPU 温度</span><span class="v" id="cpu_temp">—</span></div>
         <div class="def"><span class="k">Swap</span><span class="v" id="mem_swap">—</span></div>
       </div>
-      <div class="bar"><i id="mem_bar"></i></div>
       <canvas class="chart" id="cpu_mem_chart"></canvas>
       <div class="legend"><span class="sw" style="background:#d29922"></span>CPU 使用率&nbsp;&nbsp;<span class="sw" style="background:#f85149"></span>内存使用率</div>
     </section>
@@ -353,7 +355,6 @@ function render(d) {
   $("cpu_temp").textContent = d.cpu.temp != null ? fmt(d.cpu.temp, 1) + " °C" : "N/A";
   $("mem_pct").textContent = fmt(d.mem.pct, 1) + "%";
   $("mem_used").textContent = fmt(d.mem.used_gb, 1) + " / " + fmt(d.mem.total_gb, 1) + " GB";
-  $("mem_bar").style.width = d.mem.pct + "%";
   $("mem_avail").textContent = fmt(d.mem.avail_gb, 1) + " GB";
   $("mem_swap").textContent = fmt(d.mem.swap_used_gb, 1) + " / " + fmt(d.mem.swap_total_gb, 1) + " GB";
   chart($("cpu_mem_chart"), [

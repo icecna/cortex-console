@@ -53,6 +53,10 @@ select#theme {
 .def .v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .big { font-size: 22px; font-weight: 800; }
 
+/* 区块内小标题（如"生成统计"） */
+.subhead { font-size: 11px; font-weight: 600; color: var(--dim); text-transform: uppercase;
+  letter-spacing: 1px; margin: 12px 0 6px; padding-top: 9px; border-top: 1px solid var(--border); }
+
 /* 表格 */
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; color: var(--dim); font-size: 12px; font-weight: 500;
