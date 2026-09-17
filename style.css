@@ -84,6 +84,13 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 .cmd .tok-add { color: var(--green); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .cmd .tok-del { color: var(--red); text-decoration: line-through; opacity: .75; }
 .cmd-diff-note { font-size: 12px; color: var(--dim); margin-top: 5px; }
+.cmd-diff { margin-top: 8px; padding: 8px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+.cmd-diff-title { font-weight: 600; margin-bottom: 6px; color: var(--text); }
+.cmd-diff-row { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; flex-wrap: wrap; }
+.cmd-diff-flag { color: var(--accent); font-weight: 600; min-width: 150px; }
+.cmd-diff-cur { color: var(--red); text-decoration: line-through; }
+.cmd-diff-arrow { color: var(--dim); }
+.cmd-diff-new { color: var(--green); font-weight: 600; }
 .fcell.col { flex-direction: column; align-items: stretch; gap: 6px; }
 .fcell.col .flab { max-width: none; }
 .specchk { display: flex; flex-wrap: wrap; gap: 4px 14px; }

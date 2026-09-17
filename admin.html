@@ -280,6 +280,7 @@
         </div>
         <div class="cmd" id="cmd_preview"></div>
         <div class="cmd-diff-note" id="cmd_diff_note" style="display:none"></div>
+        <div class="cmd-diff" id="cmd_diff" style="display:none"></div>
         <div class="btnrow">
           <select class="inp grow" id="cmd_hist" title="历史命令"></select>
           <button class="btn" id="btn_cmd_revert">恢复当前</button>
@@ -624,6 +625,7 @@ function updateBatchUI() {
 }
 
 function updatePreview() {
+  hideCmdDiff();
   updateSpecUI();
   updateMultiGPUUI();
   updateMmUI();
@@ -649,6 +651,26 @@ function updatePreview() {
   } else {
     note.style.display = "none";
   }
+}
+
+function hideCmdDiff() { const b = $("cmd_diff"); if (b) b.style.display = "none"; }
+async function showCmdDiff(cmd) {
+  const box = $("cmd_diff");
+  try {
+    const j = await api("/api/admin/cmd/diff?cmd=" + encodeURIComponent(cmd));
+    const diffs = j.diffs || [];
+    const fmt = x => x === true ? "开" : (x === false ? "关" : (x || "—"));
+    let html = '<div class="cmd-diff-title">' +
+      (diffs.length ? "与当前命令的差异（" + diffs.length + " 项）" : "与当前命令一致（无差异）") + "</div>";
+    for (const d of diffs) {
+      html += '<div class="cmd-diff-row"><span class="cmd-diff-flag">' + escHtml(d.flag) + "</span>"
+            + '<span class="cmd-diff-cur">' + escHtml(fmt(d.cur)) + "</span>"
+            + '<span class="cmd-diff-arrow">→</span>'
+            + '<span class="cmd-diff-new">' + escHtml(fmt(d.new)) + "</span></div>";
+    }
+    box.innerHTML = html;
+    box.style.display = "";
+  } catch (e) { box.style.display = "none"; }
 }
 
 function fillForm(p) {
@@ -764,7 +786,7 @@ async function saveCmd(restart) {
 }
 $("cmd_hist").onchange = e => {
   const h = cmdHist[+e.target.value];
-  if (h) fillFromRaw(h.cmd);
+  if (h) { fillFromRaw(h.cmd); showCmdDiff(h.cmd); }
 };
 function fillFromRaw(cmd) {
   // 前端粗解析：只用于历史回填，精确解析以后端为准

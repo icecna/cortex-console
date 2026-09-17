@@ -872,6 +872,23 @@ def cmd_info():
             "parsed": parse_cmd(cur) if cur else None,
             "history": h[:HIST_LEN]}
 
+def cmd_diff(cmd):
+    """对比当前命令与给定命令，返回逐字段差异（选择历史命令时展示用）。"""
+    cur = _read_unit_cmd()
+    pc = parse_cmd(cur) if cur else parse_cmd("")
+    pn = parse_cmd(cmd) if cmd else parse_cmd("")
+    diffs = []
+    if pc.get("binary") != pn.get("binary"):
+        diffs.append({"key": "binary", "flag": "主程序",
+                      "cur": pc.get("binary") or "", "new": pn.get("binary") or ""})
+    for p, k in NUM_FIELDS + SEL_FIELDS + TEXT_FIELDS + FILE_FIELDS + BOOL_FIELDS:
+        if pc.get(k) != pn.get(k):
+            diffs.append({"key": k, "flag": p, "cur": pc.get(k), "new": pn.get(k)})
+    if pc.get("custom") != pn.get("custom"):
+        diffs.append({"key": "custom", "flag": "其他参数",
+                      "cur": pc.get("custom") or "", "new": pn.get("custom") or ""})
+    return {"diffs": diffs, "same": not diffs, "cur": cur, "new": cmd}
+
 # ---------------- 服务器文件浏览（选模型文件用） ----------------
 
 FILES_ROOT = "/mnt/models"
@@ -1061,6 +1078,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "未登录"})
                 return
             self._json(200, cmd_info())
+            return
+        if path == "/api/admin/cmd/diff":
+            if not self._admin_token():
+                self._json(401, {"error": "未登录"})
+                return
+            self._json(200, cmd_diff(self._query().get("cmd", "")))
             return
         if path == "/api/admin/files":
             if not self._admin_token():
