@@ -110,11 +110,6 @@
         <div class="def"><span class="k">生成速度</span><span class="v" id="log_gen">—</span></div>
       </div>
     </section>
-
-    <section class="section">
-      <h2>生成速度趋势 <span class="sub">近 10 分钟</span></h2>
-      <canvas class="chart" id="gen_trend"></canvas>
-    </section>
   </div>
 
   <!-- ===== GPU 栏 ===== -->
@@ -141,8 +136,6 @@
         <div class="def"><span class="k">CPU 温度</span><span class="v" id="cpu_temp">—</span></div>
         <div class="def"><span class="k">Swap</span><span class="v" id="mem_swap">—</span></div>
       </div>
-      <canvas class="chart" id="cpu_mem_chart"></canvas>
-      <div class="legend"><span class="sw" style="background:#d29922"></span>CPU 使用率&nbsp;&nbsp;<span class="sw" style="background:#f85149"></span>内存使用率</div>
     </section>
 
     <section class="section">
@@ -310,7 +303,6 @@ function render(d) {
     $("gen_tok_pred").textContent = fmt(M.tokens.predicted);
     $("gen_tok_max").textContent = fmt(M.tokens.max_seq);
   }
-  chart($("gen_trend"), [{ color: "#58a6ff", data: d.history.gen_tps }], 100);
 
   /* --- 日志速度 (journalctl，最近一次请求的结束值) --- */
   if (LG) {
@@ -355,10 +347,6 @@ function render(d) {
   $("mem_used").textContent = fmt(d.mem.used_gb, 1) + " / " + fmt(d.mem.total_gb, 1) + " GB";
   $("mem_avail").textContent = fmt(d.mem.avail_gb, 1) + " GB";
   $("mem_swap").textContent = fmt(d.mem.swap_used_gb, 1) + " / " + fmt(d.mem.swap_total_gb, 1) + " GB";
-  chart($("cpu_mem_chart"), [
-    { color: "#d29922", data: d.history.cpu },
-    { color: "#f85149", data: d.history.ram },
-  ], 100);
 
   /* --- 磁盘 --- */
   let drows = "";
