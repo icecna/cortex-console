@@ -151,6 +151,18 @@
               </select>
             </div>
             <div class="fcell span2"><label class="flab" title="chat 模板参数（JSON，含空格时自动加引号）">--chat-template-kwargs</label><input class="inp grow" id="f_kwargs" placeholder='{"reasoning_effort":"medium"}'></div>
+            <div class="fcell"><label class="flab" title="思考强度（推理模型，如 Qwen3 / gpt-oss）">--reasoning-effort</label>
+              <select class="inp grow sel" id="f_reasoning_effort">
+                <option value="">不设置</option><option value="default">default</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option>
+              </select>
+            </div>
+            <div class="fcell"><label class="flab" title="思考 token 预算（-1 不限 / 0 立即结束）">--reasoning-budget</label><input class="inp grow" id="f_reasoning_budget" type="number"></div>
+            <div class="fcell"><label class="flab" title="思考内容输出格式">--reasoning-format</label>
+              <select class="inp grow sel" id="f_reasoning_format">
+                <option value="">不设置</option><option value="auto">auto</option><option value="none">none</option><option value="deepseek">deepseek</option><option value="deepseek-legacy">deepseek-legacy</option>
+              </select>
+            </div>
+            <div class="fcell span2"><label class="flab" title="自定义 Jinja chat 模板（含空格时自动加引号）">--chat-template</label><input class="inp grow" id="f_chat_template" placeholder="Jinja 模板"></div>
           </div>
         </div>
         <div class="fgroup">
@@ -415,17 +427,19 @@ const NUM_IDS = [["f_c","-c"],["f_ngl","-ngl"],["f_t","-t"],["f_np","-np"],
                  ["f_b","-b"],["f_ub","-ub"],["f_port","--port"],["f_dmax","--spec-draft-n-max"],
                  ["f_dngl","-ngld"],
                  ["f_cram","--cache-ram"],["f_temp","--temp"],["f_topk","--top-k"],
-                 ["f_topp","--top-p"],["f_minp","--min-p"]];
+                 ["f_topp","--top-p"],["f_minp","--min-p"],["f_reasoning_budget","--reasoning-budget"]];
 const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_ctv","-ctv"],
                  ["f_dctk","-ctkd"],["f_dctv","-ctvd"],
-                 ["f_load","--load-mode"],["f_reasoning","--reasoning"]];
+                 ["f_load","--load-mode"],["f_reasoning","--reasoning"],
+                 ["f_reasoning_effort","--reasoning-effort"],["f_reasoning_format","--reasoning-format"]];
 const SPEC_TYPES = ["none","draft-mtp","draft-simple","draft-eagle3","draft-dflash","draft-dspark",
                     "ngram-simple","ngram-map-k","ngram-map-k4v","ngram-mod","ngram-cache"];
 const SPEC_NEED_DRAFT = ["draft-simple","draft-eagle3","draft-dflash","draft-dspark"];
 const specId = t => "f_spec_" + t.replace(/-/g, "_");
 const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","--no-mmproj-offload"]];
 const TXT_IDS = [["f_alias","--alias"],["f_ts","--tensor-split"],
-                 ["f_host","--host"],["f_kwargs","--chat-template-kwargs"]];
+                 ["f_host","--host"],["f_kwargs","--chat-template-kwargs"],
+                 ["f_chat_template","--chat-template"]];
 
 function buildCmd() {
   const v = id => $(id).value.trim();
@@ -446,6 +460,7 @@ function buildCmd() {
     let x = v(id);
     if (!x || $(id).disabled) continue;
     if (id === "f_kwargs" && x.includes("{") && !x.startsWith("'")) x = "'" + x + "'";
+    if (id === "f_chat_template" && x.includes(" ") && !x.startsWith("'")) x = "'" + x + "'";
     parts.push(p, x);
   }
   const custom = v("f_custom");
@@ -583,11 +598,12 @@ function fillForm(p) {
                            ["f_b","b"],["f_ub","ub"],["f_port","port"],["f_dmax","draft_n_max"],
                            ["f_dngl","draft_ngl"],
                            ["f_cram","cache_ram"],["f_temp","temp"],["f_topk","top_k"],
-                           ["f_topp","top_p"],["f_minp","min_p"]])
+                           ["f_topp","top_p"],["f_minp","min_p"],["f_reasoning_budget","reasoning_budget"]])
     $(id).value = p[key] || "";
   for (const [id, key] of [["f_fa","fa"],["f_split","split"],["f_ctk","ctk"],["f_ctv","ctv"],
                            ["f_dctk","draft_ctk"],["f_dctv","draft_ctv"],
-                           ["f_load","load_mode"],["f_reasoning","reasoning"]]) {
+                           ["f_load","load_mode"],["f_reasoning","reasoning"],
+                           ["f_reasoning_effort","reasoning_effort"],["f_reasoning_format","reasoning_format"]]) {
     const x = p[key] || "";
     $(id).value = [...$(id).options].some(o => o.value === x) ? x : "";
   }
@@ -598,7 +614,8 @@ function fillForm(p) {
   for (const [id, key] of [["f_metrics","metrics"],["f_nohost","no_host"],["f_nommo","no_mmproj_offload"]])
     $(id).checked = !!p[key];
   for (const [id, key] of [["f_alias","alias"],["f_ts","tensor_split"],
-                           ["f_host","host"],["f_kwargs","chat_kwargs"]])
+                           ["f_host","host"],["f_kwargs","chat_kwargs"],
+                           ["f_chat_template","chat_template"]])
     $(id).value = p[key] || "";
   const devSet = new Set((p.device || "").split(",").map(s => s.trim()).filter(Boolean));
   [...$("devchk").querySelectorAll("input")].forEach(cb => { cb.checked = devSet.has(cb.dataset.dev); });
@@ -681,8 +698,9 @@ function fillFromRaw(cmd) {
   cmdBinary = m ? m[1] : "";
   const p = { model: "", mmproj: "", draft: "", c: "", ngl: "", t: "", np: "", b: "", ub: "",
               port: "", draft_n_max: "", draft_ngl: "", cache_ram: "", temp: "", top_k: "", top_p: "", min_p: "",
+              reasoning_budget: "", reasoning_effort: "", reasoning_format: "",
               fa: "", split: "", ctk: "", ctv: "", draft_ctk: "", draft_ctv: "", load_mode: "", spec_type: "", reasoning: "",
-              alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "",
+              alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "", chat_template: "",
               metrics: false, no_host: false, no_mmproj_offload: false, custom: "" };
   let rest = cmd.replace(cmdBinary, "");
   const grab = (pat, key) => {
@@ -715,11 +733,15 @@ function fillFromRaw(cmd) {
   grab(/(?:^|\s)--load-mode\s+(\S+)/, "load_mode");
   grab(/(?:^|\s)--spec-type\s+(\S+)/, "spec_type");
   grab(/(?:^|\s)--reasoning\s+(\S+)/, "reasoning");
+  grab(/(?:^|\s)--reasoning-budget\s+(\S+)/, "reasoning_budget");
+  grab(/(?:^|\s)--reasoning-effort\s+(\S+)/, "reasoning_effort");
+  grab(/(?:^|\s)--reasoning-format\s+(\S+)/, "reasoning_format");
   grab(/(?:^|\s)--alias\s+(\S+)/, "alias");
   grab(/(?:^|\s)--device\s+(\S+)/, "device");
   grab(/(?:^|\s)--tensor-split\s+(\S+)/, "tensor_split");
   grab(/(?:^|\s)--host\s+(\S+)/, "host");
   grab(/(?:^|\s)--chat-template-kwargs\s+(\S+)/, "chat_kwargs");
+  grab(/(?:^|\s)--chat-template\s+('(?:[^']*)'|\S+)/, "chat_template");
   p.metrics = /(?:^|\s)--metrics(?=\s|$)/.test(rest);
   p.no_host = /(?:^|\s)--no-host(?=\s|$)/.test(rest);
   p.no_mmproj_offload = /(?:^|\s)--no-mmproj-offload(?=\s|$)/.test(rest);

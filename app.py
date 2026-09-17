@@ -802,16 +802,19 @@ NUM_FIELDS = [
     ("-ngld", "draft_ngl"),
     ("--cache-ram", "cache_ram"), ("--temp", "temp"), ("--top-k", "top_k"),
     ("--top-p", "top_p"), ("--min-p", "min_p"),
+    ("--reasoning-budget", "reasoning_budget"),
 ]
 # 下拉菜单：值必须是固定选项之一（选项列表见 admin.html）
 SEL_FIELDS = [
     ("-fa", "fa"), ("--split-mode", "split"), ("-ctk", "ctk"), ("-ctv", "ctv"),
     ("-ctkd", "draft_ctk"), ("-ctvd", "draft_ctv"),
     ("--load-mode", "load_mode"), ("--spec-type", "spec_type"), ("--reasoning", "reasoning"),
+    ("--reasoning-effort", "reasoning_effort"), ("--reasoning-format", "reasoning_format"),
 ]
 TEXT_FIELDS = [
     ("--alias", "alias"), ("--device", "device"), ("--tensor-split", "tensor_split"),
     ("--host", "host"), ("--chat-template-kwargs", "chat_kwargs"),
+    ("--chat-template", "chat_template"),
 ]
 FILE_FIELDS = [("-m", "model"), ("--mmproj", "mmproj"), ("--model-draft", "draft")]
 # 草稿模型文件的三种等价写法（--spec-draft-model / --model-draft / -md），解析时都识别
@@ -832,7 +835,7 @@ def parse_cmd(cmd):
         rest = rest[m.end():]
     for p, key in NUM_FIELDS + SEL_FIELDS + TEXT_FIELDS + FILE_FIELDS:
         pat = DRAFT_FLAG if key == "draft" else re.escape(p)
-        m = re.search(r"(?:^|\s)" + pat + r"\s+(\S+)", rest)
+        m = re.search(r"(?:^|\s)" + pat + r"\s+('(?:[^']*)'|\"(?:[^\"]*)\"|\S+)", rest)
         if m:
             d[key] = m.group(1)
             rest = rest[:m.start()] + " " + rest[m.end():]
