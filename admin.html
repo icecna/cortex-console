@@ -398,7 +398,7 @@ function buildCmd() {
   if (v("f_model")) parts.push("-m", v("f_model"));
   if (v("f_mmproj")) parts.push("--mmproj", v("f_mmproj"));
   if (v("f_draft") && !$("f_draft").disabled) parts.push("--model-draft", v("f_draft"));
-  for (const [id, p] of NUM_IDS) { const x = v(id); if (x) parts.push(p, x); }
+  for (const [id, p] of NUM_IDS) { const x = v(id); if (x && !$(id).disabled) parts.push(p, x); }
   for (const [id, p] of SEL_IDS) { const x = v(id); if (x && !$(id).disabled) parts.push(p, x); }
   const specActive = SPEC_TYPES.filter(t => t !== "none" && $(specId(t)).checked);
   if ($("f_spec_none").checked || specActive.length) {

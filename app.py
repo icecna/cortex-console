@@ -465,7 +465,7 @@ def _push(d):
             del h[:len(h) - HISTORY_LEN]
 
 def snapshot(m=None):
-    props = llama_props()
+    props = dict(llama_props())  # 拷贝，避免把派生的 n_ctx 写回共享缓存
     if m is None:
         m = llama_metrics()
     proc = llama_proc()
@@ -660,7 +660,11 @@ def health_info():
 def logs_tail(n, prio):
     if prio not in ("info", "warning", "err"):
         prio = "info"
-    n = max(1, min(5000, int(n)))
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 200
+    n = max(1, min(5000, n))
     return _run(["journalctl", "-u", "llama-server", "-n", str(n),
                  "-p", prio, "--no-pager", "-q"], timeout=10)
 
@@ -675,7 +679,11 @@ def _spec_counters():
             "accepted": s.get("llamacpp:spec_decode_num_accepted_tokens_total", 0)}
 
 def test_generation(prompt, n_predict):
-    n_predict = max(1, min(1024, int(n_predict)))
+    try:
+        n_predict = int(n_predict)
+    except (TypeError, ValueError):
+        n_predict = 64
+    n_predict = max(1, min(1024, n_predict))
     before = _spec_counters()
     body = json.dumps({"prompt": prompt, "n_predict": n_predict,
                        "stream": False}).encode()
