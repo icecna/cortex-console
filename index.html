@@ -101,7 +101,6 @@
         <div class="def"><span class="k">草稿 tokens</span><span class="v" id="mtp_drafttok">—</span></div>
         <div class="def"><span class="k">被接受 tokens</span><span class="v" id="mtp_acc">—</span></div>
       </div>
-      <canvas class="chart" id="mtp_chart"></canvas>
     </section>
 
     <section class="section">
@@ -311,7 +310,6 @@ function render(d) {
     $("gen_tok_pred").textContent = fmt(M.tokens.predicted);
     $("gen_tok_max").textContent = fmt(M.tokens.max_seq);
   }
-  chart($("mtp_chart"), [{ color: "#bc8cff", data: d.history.mtp }], 100);
   chart($("gen_trend"), [{ color: "#58a6ff", data: d.history.gen_tps }], 100);
 
   /* --- 日志速度 (journalctl，最近一次请求的结束值) --- */
