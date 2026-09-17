@@ -278,6 +278,10 @@
           <h3>自定义命令（其他参数）</h3>
           <textarea class="ta" id="f_custom" rows="3" spellcheck="false" placeholder="其他未列出的启动参数，原样追加到命令末尾"></textarea>
         </div>
+        <div class="cmd-bar">
+          <span class="cmd-bar-label">命令预览</span>
+          <button class="btn sm" id="btn_cmd_copy" title="复制完整启动命令">复制</button>
+        </div>
         <div class="cmd" id="cmd_preview"></div>
         <div class="cmd-diff-note" id="cmd_diff_note" style="display:none"></div>
         <div class="cmd-diff" id="cmd_diff" style="display:none"></div>
@@ -321,6 +325,7 @@
           <input class="inp" id="log_filter" style="width:130px" placeholder="过滤关键词…" title="按关键词过滤日志行（不区分大小写）">
           <label class="chk"><input type="checkbox" id="log_follow" checked> 跟随</label>
           <button class="btn" id="btn_log_refresh">刷新</button>
+          <button class="btn" id="btn_log_copy">复制</button>
           <button class="btn" id="btn_log_clear">清空</button>
           <a class="link" id="log_dl" href="#">下载</a>
         </div>
@@ -543,6 +548,27 @@ function tokenizeCmd(cmd) {
 
 function escHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) {}
+  document.body.removeChild(ta);
+  return Promise.resolve(ok);
+}
+function flashBtn(btn, ok) {
+  const old = btn.textContent;
+  btn.textContent = ok ? "已复制" : "失败";
+  btn.disabled = true;
+  setTimeout(() => { btn.textContent = old; btn.disabled = false; }, 1200);
 }
 
 function updateSpecUI() {
@@ -920,6 +946,11 @@ function fillFromRaw(cmd) {
 $("btn_cmd_revert").onclick = loadCmd;
 $("btn_cmd_save").onclick = () => saveCmd(false);
 $("btn_cmd_save_restart").onclick = () => saveCmd(true);
+$("btn_cmd_copy").onclick = () => {
+  const t = buildCmd();
+  if (!t) { flashBtn($("btn_cmd_copy"), false); return; }
+  copyText(t).then(ok => flashBtn($("btn_cmd_copy"), ok));
+};
 [...NUM_IDS.map(x => x[0]), ...SEL_IDS.map(x => x[0]), ...TXT_IDS.map(x => x[0]),
  "f_model", "f_mmproj", "f_draft", "f_chat_template_file", "f_binary", "f_custom"]
   .forEach(id => $(id).addEventListener("input", updatePreview));
@@ -1062,6 +1093,11 @@ $("log_follow").onchange = openStream;
 $("log_prio").onchange = () => { loadTail(); openStream(); };
 $("btn_log_refresh").onclick = loadTail;
 $("btn_log_clear").onclick = () => { $("log_view").innerHTML = ""; };
+$("btn_log_copy").onclick = () => {
+  const t = [...$("log_view").children].map(c => c.textContent).join("\n");
+  if (!t) { flashBtn($("btn_log_copy"), false); return; }
+  copyText(t).then(ok => flashBtn($("btn_log_copy"), ok));
+};
 $("log_dl").onclick = e => {
   e.preventDefault();
   const a = document.createElement("a");
