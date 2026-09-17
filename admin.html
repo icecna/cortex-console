@@ -156,6 +156,7 @@
               </select>
             </div>
           </div>
+          <div class="fhint" id="batch_hint"></div>
         </div>
         <div class="fgroup">
           <h3>多 GPU</h3>
@@ -495,10 +496,23 @@ function updateMmUI() {
   $("f_nommo").disabled = !hasMm;
 }
 
+function updateBatchUI() {
+  const hint = $("batch_hint");
+  const b = $("f_b").value.trim(), ub = $("f_ub").value.trim();
+  if (b && ub && +ub > +b) {
+    hint.textContent = "⚠ 微批(-ub " + ub + ") 大于批(-b " + b + ")，通常 -ub ≤ -b";
+    hint.className = "fhint warn";
+  } else {
+    hint.textContent = "";
+    hint.className = "fhint";
+  }
+}
+
 function updatePreview() {
   updateSpecUI();
   updateMultiGPUUI();
   updateMmUI();
+  updateBatchUI();
   const el = $("cmd_preview"), note = $("cmd_diff_note");
   const newCmd = buildCmd();
   if (!newCmd) { el.textContent = "（空）"; note.style.display = "none"; return; }
