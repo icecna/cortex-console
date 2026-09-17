@@ -78,6 +78,14 @@
       <section class="section">
         <h2><span class="sico">⚙️</span>启动参数</h2>
         <div class="fgroup">
+          <h3>主程序</h3>
+          <div class="frow">
+            <label class="flab" title="llama-server 可执行文件路径">llama-server 主程序</label>
+            <input class="inp grow" id="f_binary" readonly title="点击右侧按钮选择">
+            <button class="btn" onclick="openFileBrowser('f_binary')">选择</button>
+          </div>
+        </div>
+        <div class="fgroup">
           <h3>模型</h3>
           <div class="frow">
             <label class="flab" title="主模型文件路径（.gguf）">-m 模型</label>
@@ -162,12 +170,17 @@
                 <option value="">不设置</option><option value="auto">auto</option><option value="none">none</option><option value="deepseek">deepseek</option><option value="deepseek-legacy">deepseek-legacy</option>
               </select>
             </div>
-            <div class="fcell span2"><label class="flab" title="自定义 Jinja chat 模板（含空格时自动加引号）">--chat-template</label><input class="inp grow" id="f_chat_template" placeholder="Jinja 模板"></div>
             <div class="fcell"><label class="flab" title="重复惩罚（>1 抑制重复，默认 1.0）">--repeat-penalty</label><input class="inp grow" id="f_repeat_penalty" type="number" step="0.01"></div>
             <div class="fcell"><label class="flab" title="存在惩罚（OpenAI 兼容，抑制已出现 token）">--presence-penalty</label><input class="inp grow" id="f_presence_penalty" type="number" step="0.01"></div>
             <div class="fcell"><label class="flab" title="频率惩罚（OpenAI 兼容，按出现次数抑制）">--frequency-penalty</label><input class="inp grow" id="f_frequency_penalty" type="number" step="0.01"></div>
             <div class="fcell"><label class="flab" title="惩罚回看窗口（-1 = 全部历史）">--repeat-last-n</label><input class="inp grow" id="f_repeat_last_n" type="number"></div>
             <div class="fcell"><label class="flab" title="随机种子（固定值可复现）">--seed</label><input class="inp grow" id="f_seed" type="number"></div>
+          </div>
+          <div class="frow">
+            <label class="flab" title="从文件加载 Jinja chat 模板（--chat-template-file）">--chat-template-file 模板文件</label>
+            <input class="inp grow" id="f_chat_template_file" readonly title="点击右侧按钮选择">
+            <button class="btn" onclick="openFileBrowser('f_chat_template_file')">选择</button>
+            <button class="btn" onclick="clearFile('f_chat_template_file')">清空</button>
           </div>
         </div>
         <div class="fgroup">
@@ -484,7 +497,7 @@ const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","
                  ["f_no_webui","--no-webui"]];
 const TXT_IDS = [["f_alias","--alias"],["f_ts","--tensor-split"],
                  ["f_host","--host"],["f_kwargs","--chat-template-kwargs"],
-                 ["f_chat_template","--chat-template"],["f_fit_target","--fit-target"],
+                 ["f_fit_target","--fit-target"],
                  ["f_api_key","--api-key"]];
 
 function buildCmd() {
@@ -493,6 +506,7 @@ function buildCmd() {
   if (v("f_model")) parts.push("-m", v("f_model"));
   if (v("f_mmproj")) parts.push("--mmproj", v("f_mmproj"));
   if (v("f_draft") && !$("f_draft").disabled) parts.push("--model-draft", v("f_draft"));
+  if (v("f_chat_template_file")) parts.push("--chat-template-file", v("f_chat_template_file"));
   for (const [id, p] of NUM_IDS) { const x = v(id); if (x && !$(id).disabled) parts.push(p, x); }
   for (const [id, p] of SEL_IDS) { const x = v(id); if (x && !$(id).disabled) parts.push(p, x); }
   const specActive = SPEC_TYPES.filter(t => t !== "none" && $(specId(t)).checked);
@@ -506,13 +520,13 @@ function buildCmd() {
     let x = v(id);
     if (!x || $(id).disabled) continue;
     if (id === "f_kwargs" && x.includes("{") && !x.startsWith("'")) x = "'" + x + "'";
-    if (id === "f_chat_template" && x.includes(" ") && !x.startsWith("'")) x = "'" + x + "'";
     if (id === "f_api_key" && x.includes(" ") && !x.startsWith("'")) x = "'" + x + "'";
     parts.push(p, x);
   }
   const custom = v("f_custom");
   if (custom) parts.push(custom);
-  return (cmdBinary ? cmdBinary + " " : "") + parts.join(" ");
+  const bin = $("f_binary").value.trim();
+  return (bin ? bin + " " : "") + parts.join(" ");
 }
 
 function tokenizeCmd(cmd) {
@@ -641,6 +655,7 @@ function fillForm(p) {
   $("f_model").value = p.model || "";
   $("f_mmproj").value = p.mmproj || "";
   $("f_draft").value = p.draft || "";
+  $("f_chat_template_file").value = p.chat_template_file || "";
   for (const [id, key] of [["f_c","c"],["f_ngl","ngl"],["f_t","t"],["f_np","np"],
                            ["f_b","b"],["f_ub","ub"],["f_port","port"],["f_dmax","draft_n_max"],
                            ["f_dngl","draft_ngl"],
@@ -672,7 +687,7 @@ function fillForm(p) {
     $(id).checked = !!p[key];
   for (const [id, key] of [["f_alias","alias"],["f_ts","tensor_split"],
                            ["f_host","host"],["f_kwargs","chat_kwargs"],
-                           ["f_chat_template","chat_template"],["f_fit_target","fit_target"],
+                           ["f_fit_target","fit_target"],
                            ["f_api_key","api_key"]])
     $(id).value = p[key] || "";
   const devSet = new Set((p.device || "").split(",").map(s => s.trim()).filter(Boolean));
@@ -717,6 +732,7 @@ async function loadCmd() {
   try {
     const j = await api("/api/admin/cmd");
     cmdBinary = (j.parsed && j.parsed.binary) || "";
+    $("f_binary").value = cmdBinary;
     cmdCurrent = j.current || "";
     cmdHist = j.history || [];
     if (j.parsed) fillForm(j.parsed);
@@ -754,6 +770,7 @@ function fillFromRaw(cmd) {
   // 前端粗解析：只用于历史回填，精确解析以后端为准
   const m = cmd.match(/(\S+)\s/);
   cmdBinary = m ? m[1] : "";
+  $("f_binary").value = cmdBinary;
   const p = { model: "", mmproj: "", draft: "", c: "", ngl: "", t: "", np: "", b: "", ub: "",
               port: "", draft_n_max: "", draft_ngl: "", cache_ram: "", temp: "", top_k: "", top_p: "", min_p: "",
               reasoning_budget: "", reasoning_effort: "", reasoning_format: "",
@@ -762,7 +779,7 @@ function fillFromRaw(cmd) {
               numa: "", rope_scaling: "", rope_scale: "",
               threads_http: "", timeout: "", sleep_idle_seconds: "", api_key: "",
               fa: "", split: "", ctk: "", ctv: "", draft_ctk: "", draft_ctv: "", load_mode: "", spec_type: "", reasoning: "",
-              alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "", chat_template: "",
+              alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "", chat_template_file: "",
               metrics: false, no_host: false, no_mmproj_offload: false, no_kv_offload: false,
               context_shift: false, no_webui: false, custom: "" };
   let rest = cmd.replace(cmdBinary, "");
@@ -822,7 +839,7 @@ function fillFromRaw(cmd) {
   grab(/(?:^|\s)--tensor-split\s+(\S+)/, "tensor_split");
   grab(/(?:^|\s)--host\s+(\S+)/, "host");
   grab(/(?:^|\s)--chat-template-kwargs\s+(\S+)/, "chat_kwargs");
-  grab(/(?:^|\s)--chat-template\s+('(?:[^']*)'|\S+)/, "chat_template");
+  grab(/(?:^|\s)--chat-template-file\s+(\S+)/, "chat_template_file");
   p.metrics = /(?:^|\s)--metrics(?=\s|$)/.test(rest);
   p.no_host = /(?:^|\s)--no-host(?=\s|$)/.test(rest);
   p.no_mmproj_offload = /(?:^|\s)--no-mmproj-offload(?=\s|$)/.test(rest);
@@ -836,7 +853,7 @@ $("btn_cmd_revert").onclick = loadCmd;
 $("btn_cmd_save").onclick = () => saveCmd(false);
 $("btn_cmd_save_restart").onclick = () => saveCmd(true);
 [...NUM_IDS.map(x => x[0]), ...SEL_IDS.map(x => x[0]), ...TXT_IDS.map(x => x[0]),
- "f_model", "f_mmproj", "f_draft", "f_custom"]
+ "f_model", "f_mmproj", "f_draft", "f_chat_template_file", "f_binary", "f_custom"]
   .forEach(id => $(id).addEventListener("input", updatePreview));
 CHK_IDS.forEach(([id]) => $(id).addEventListener("change", updatePreview));
 SPEC_TYPES.forEach(t => {

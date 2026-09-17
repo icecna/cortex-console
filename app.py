@@ -824,10 +824,11 @@ SEL_FIELDS = [
 TEXT_FIELDS = [
     ("--alias", "alias"), ("--device", "device"), ("--tensor-split", "tensor_split"),
     ("--host", "host"), ("--chat-template-kwargs", "chat_kwargs"),
-    ("--chat-template", "chat_template"), ("--fit-target", "fit_target"),
+    ("--fit-target", "fit_target"),
     ("--api-key", "api_key"),
 ]
-FILE_FIELDS = [("-m", "model"), ("--mmproj", "mmproj"), ("--model-draft", "draft")]
+FILE_FIELDS = [("-m", "model"), ("--mmproj", "mmproj"), ("--model-draft", "draft"),
+               ("--chat-template-file", "chat_template_file")]
 # 草稿模型文件的三种等价写法（--spec-draft-model / --model-draft / -md），解析时都识别
 DRAFT_FLAG = r"(?:--spec-draft-model|--model-draft|-md)"
 BOOL_FIELDS = [("--metrics", "metrics"), ("--no-host", "no_host"),
