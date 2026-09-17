@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "0.0.0.0"
 PORTS = (80, 8090)
-LLAMA = "http://127.0.0.1:8080"
+LLAMA = "http://127.0.0.1:8080"  # 兜底地址（--host 未指定或 0.0.0.0 时用回环）
 POLL = 2.0        # 硬件采样间隔
 POLL_LLAMA = 0.5  # llama metrics 采样间隔（速度类指标更跟手）
 HISTORY_LEN = 300  # 10 分钟 @ 2s
@@ -47,6 +47,49 @@ def _get(url, timeout=3):
             return r.read().decode("utf-8", "replace")
     except Exception:
         return None
+
+def _llama_cmdline():
+    """读 llama-server 进程的真实启动命令（cmdline），找不到返回 None。
+    只读 /proc，不触碰 CPU 采样状态（_proc_prev）。"""
+    for p in os.listdir("/proc"):
+        if not p.isdigit():
+            continue
+        try:
+            with open("/proc/%s/comm" % p) as f:
+                if f.read().strip() != "llama-server":
+                    continue
+            with open("/proc/%s/cmdline" % p, "rb") as f:
+                return f.read().replace(b"\0", b" ").decode().strip()
+        except Exception:
+            continue
+    return None
+
+_llama_base = None  # (url, ts) 缓存，避免每次探测都重读 /proc
+
+def llama_base():
+    """解析 llama-server 实际监听地址，构造本机可访问的 base URL（带缓存）。
+    优先读进程 cmdline（真实运行命令），回退到单元文件 ExecStart。
+    --host 为 0.0.0.0/::/空 时用 127.0.0.1，否则用 --host 指定的地址。"""
+    global _llama_base
+    now = time.monotonic()
+    if _llama_base is not None and now - _llama_base[1] < 5:
+        return _llama_base[0]
+    host, port = "127.0.0.1", 8080
+    cmd = _llama_cmdline() or _read_unit_cmd()
+    if cmd:
+        d = parse_cmd(cmd)
+        h = d.get("host")
+        if h and h not in ("0.0.0.0", "::", "[::]"):
+            host = h
+        p = d.get("port")
+        if p:
+            try:
+                port = int(p)
+            except (TypeError, ValueError):
+                pass
+    url = "http://%s:%d" % (host, port)
+    _llama_base = (url, now)
+    return url
 
 def parse_prom(text):
     scalars, labeled = {}, {}
@@ -319,7 +362,7 @@ _gen_hold = None  # (tps, ts) 最近一次非零生成速度，用于结束后�
 
 def llama_metrics():
     global _llama_prev, _gen_hold
-    text = _get(LLAMA + "/metrics")
+    text = _get(llama_base() + "/metrics")
     if text is None:
         _llama_prev = None
         return None
@@ -447,7 +490,7 @@ def llama_props():
     global _props_cache, _props_ts
     if _props_cache is not None and time.time() - _props_ts < 30:
         return _props_cache
-    text = _get(LLAMA + "/props")
+    text = _get(llama_base() + "/props")
     if text is None:
         return _props_cache
     try:
@@ -661,7 +704,7 @@ def probe_llama():
     t0 = time.time()
     for path in ("/health", "/"):
         try:
-            with urllib.request.urlopen(LLAMA + path, timeout=3) as r:
+            with urllib.request.urlopen(llama_base() + path, timeout=3) as r:
                 return {"ok": True, "ms": int((time.time() - t0) * 1000), "code": r.status}
         except urllib.error.HTTPError:
             continue  # 服务有响应但该端点不存在，换下一个
@@ -694,7 +737,7 @@ def logs_tail(n, prio, since_hours=None):
 
 def _spec_counters():
     """读投机解码累计计数器（快速测试前后差值用）。"""
-    text = _get(LLAMA + "/metrics")
+    text = _get(llama_base() + "/metrics")
     if text is None:
         return None
     s, _ = parse_prom(text)
@@ -711,7 +754,7 @@ def test_generation(prompt, n_predict):
     before = _spec_counters()
     body = json.dumps({"prompt": prompt, "n_predict": n_predict,
                        "stream": False}).encode()
-    req = urllib.request.Request(LLAMA + "/completion", data=body,
+    req = urllib.request.Request(llama_base() + "/completion", data=body,
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=300) as r:
