@@ -228,6 +228,18 @@ body.admin-page .cols2 > .col {
 body.admin-page .cols2 > .col::-webkit-scrollbar { width: 8px; }
 body.admin-page .cols2 > .col::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 body.admin-page .cols2 > .col::-webkit-scrollbar-track { background: transparent; }
+/* 右列：实时日志框自适应填满，消除底部留白 */
+body.admin-page .cols2 > .col:last-child > .section:first-child {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+body.admin-page .cols2 > .col:last-child > .section:first-child > .logview {
+  flex: 1 1 auto;
+  min-height: 160px;
+  height: auto;
+}
 
 @media (max-width: 1250px) {
   .cols { grid-template-columns: 1fr 1fr; }
@@ -237,6 +249,8 @@ body.admin-page .cols2 > .col::-webkit-scrollbar-track { background: transparent
   body.admin-page #admin_main { display: block; }
   body.admin-page .cols2 { grid-template-rows: auto; overflow: visible; }
   body.admin-page .cols2 > .col { overflow: visible; padding-right: 0; }
+  body.admin-page .cols2 > .col:last-child > .section:first-child { flex: none; display: block; }
+  body.admin-page .cols2 > .col:last-child > .section:first-child > .logview { height: 420px; flex: none; }
 }
 @media (max-width: 800px) {
   .cols { grid-template-columns: 1fr; }
