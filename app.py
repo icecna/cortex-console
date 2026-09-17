@@ -796,7 +796,9 @@ TEXT_FIELDS = [
     ("--alias", "alias"), ("--device", "device"), ("--tensor-split", "tensor_split"),
     ("--host", "host"), ("--chat-template-kwargs", "chat_kwargs"),
 ]
-FILE_FIELDS = [("-m", "model"), ("--mmproj", "mmproj"), ("--spec-draft", "draft")]
+FILE_FIELDS = [("-m", "model"), ("--mmproj", "mmproj"), ("--model-draft", "draft")]
+# 草稿模型文件的三种等价写法（--spec-draft-model / --model-draft / -md），解析时都识别
+DRAFT_FLAG = r"(?:--spec-draft-model|--model-draft|-md)"
 BOOL_FIELDS = [("--metrics", "metrics"), ("--no-host", "no_host"),
                ("--no-mmproj-offload", "no_mmproj_offload")]
 
@@ -812,7 +814,8 @@ def parse_cmd(cmd):
         d["binary"] = m.group(1)
         rest = rest[m.end():]
     for p, key in NUM_FIELDS + SEL_FIELDS + TEXT_FIELDS + FILE_FIELDS:
-        m = re.search(r"(?:^|\s)" + re.escape(p) + r"\s+(\S+)", rest)
+        pat = DRAFT_FLAG if key == "draft" else re.escape(p)
+        m = re.search(r"(?:^|\s)" + pat + r"\s+(\S+)", rest)
         if m:
             d[key] = m.group(1)
             rest = rest[:m.start()] + " " + rest[m.end():]
@@ -892,7 +895,7 @@ def _check_cmd_files(cmd):
             return "未知投机解码类型: " + t
     if "none" not in types and any(t in SPEC_NEED_DRAFT for t in types) and not p.get("draft"):
         return ("投机解码类型 " + ",".join(t for t in types if t in SPEC_NEED_DRAFT)
-                + " 需要草稿模型文件（--spec-draft）")
+                + " 需要草稿模型文件（--model-draft）")
     devs = [d.strip() for d in (p.get("device") or "").split(",") if d.strip()]
     ts = [x.strip() for x in (p.get("tensor_split") or "").split(",") if x.strip()]
     if len(devs) >= 2 and ts and len(ts) != len(devs):
@@ -900,7 +903,7 @@ def _check_cmd_files(cmd):
     checks = [
         (p.get("model"), "模型文件 (-m)"),
         (p.get("mmproj"), "多模态投影器文件 (--mmproj)"),
-        (p.get("draft"), "草稿模型文件 (--spec-draft)"),
+        (p.get("draft"), "草稿模型文件 (--model-draft)"),
     ]
     for path, name in checks:
         if not path:

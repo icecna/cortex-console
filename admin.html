@@ -84,7 +84,7 @@
         <div class="fgroup">
           <h3>MTP · 投机解码</h3>
           <div class="frow" id="row_draft">
-            <label class="flab" title="投机解码草稿模型文件">--spec-draft 草稿模型</label>
+            <label class="flab" title="投机解码草稿模型文件">--model-draft 草稿模型</label>
             <input class="inp grow" id="f_draft" readonly>
             <button class="btn" onclick="openFileBrowser('f_draft')">选择</button>
             <button class="btn" onclick="clearFile('f_draft')">清空</button>
@@ -397,7 +397,7 @@ function buildCmd() {
   const parts = [];
   if (v("f_model")) parts.push("-m", v("f_model"));
   if (v("f_mmproj")) parts.push("--mmproj", v("f_mmproj"));
-  if (v("f_draft") && !$("f_draft").disabled) parts.push("--spec-draft", v("f_draft"));
+  if (v("f_draft") && !$("f_draft").disabled) parts.push("--model-draft", v("f_draft"));
   for (const [id, p] of NUM_IDS) { const x = v(id); if (x) parts.push(p, x); }
   for (const [id, p] of SEL_IDS) { const x = v(id); if (x && !$(id).disabled) parts.push(p, x); }
   const specActive = SPEC_TYPES.filter(t => t !== "none" && $(specId(t)).checked);
@@ -443,7 +443,7 @@ function updateSpecUI() {
   $("f_dmax").disabled = active.length === 0;
   cell.classList.toggle("disabled", active.length === 0);
   if (needDraft && !$("f_draft").value) {
-    hint.textContent = "⚠ 当前类型需要指定草稿模型文件（--spec-draft）";
+    hint.textContent = "⚠ 当前类型需要指定草稿模型文件（--model-draft）";
     hint.className = "fhint warn";
   } else if (needDraft) {
     hint.textContent = "当前类型使用指定的草稿模型";
@@ -650,7 +650,7 @@ function fillFromRaw(cmd) {
   };
   grab(/(?:^|\s)-m\s+(\S+)/, "model");
   grab(/(?:^|\s)--mmproj\s+(\S+)/, "mmproj");
-  grab(/(?:^|\s)--spec-draft\s+(\S+)/, "draft");
+  grab(/(?:^|\s)(?:--spec-draft-model|--model-draft|-md)\s+(\S+)/, "draft");
   grab(/(?:^|\s)-c\s+(\S+)/, "c");
   grab(/(?:^|\s)-ngl\s+(\S+)/, "ngl");
   grab(/(?:^|\s)-t\s+(\S+)/, "t");
