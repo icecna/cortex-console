@@ -124,6 +124,17 @@
               </div>
             </div>
             <div class="fcell" id="cell_dmax"><label class="flab" title="投机解码最大草稿步数">--spec-draft-n-max</label><input class="inp grow" id="f_dmax" type="number"></div>
+            <div class="fcell draft-only" id="cell_dngl"><label class="flab" title="草稿模型卸载到 GPU 的层数（99 = 全部）">-ngld 草稿卸载层</label><input class="inp grow" id="f_dngl" type="number"></div>
+            <div class="fcell draft-only" id="cell_dctk"><label class="flab" title="草稿模型 K 缓存量化类型">-ctkd 草稿KV-K</label>
+              <select class="inp grow sel" id="f_dctk">
+                <option value="">不设置</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option><option value="iq4_nl">iq4_nl</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="f32">f32</option>
+              </select>
+            </div>
+            <div class="fcell draft-only" id="cell_dctv"><label class="flab" title="草稿模型 V 缓存量化类型">-ctvd 草稿KV-V</label>
+              <select class="inp grow sel" id="f_dctv">
+                <option value="">不设置</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option><option value="iq4_nl">iq4_nl</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="f32">f32</option>
+              </select>
+            </div>
           </div>
           <div class="fhint" id="spec_hint"></div>
         </div>
@@ -402,9 +413,11 @@ async function refreshHealth() {
 let cmdHist = [], cmdBinary = "", cmdCurrent = "";
 const NUM_IDS = [["f_c","-c"],["f_ngl","-ngl"],["f_t","-t"],["f_np","-np"],
                  ["f_b","-b"],["f_ub","-ub"],["f_port","--port"],["f_dmax","--spec-draft-n-max"],
+                 ["f_dngl","-ngld"],
                  ["f_cram","--cache-ram"],["f_temp","--temp"],["f_topk","--top-k"],
                  ["f_topp","--top-p"],["f_minp","--min-p"]];
 const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_ctv","-ctv"],
+                 ["f_dctk","-ctkd"],["f_dctv","-ctvd"],
                  ["f_load","--load-mode"],["f_reasoning","--reasoning"]];
 const SPEC_TYPES = ["none","draft-mtp","draft-simple","draft-eagle3","draft-dflash","draft-dspark",
                     "ngram-simple","ngram-map-k","ngram-map-k4v","ngram-mod","ngram-cache"];
@@ -462,6 +475,10 @@ function updateSpecUI() {
   const draftOn = needDraft || hasMtp;
   row.classList.toggle("disabled", !draftOn);
   row.querySelectorAll("input, button").forEach(el => { el.disabled = !draftOn; });
+  document.querySelectorAll(".draft-only").forEach(el => {
+    el.classList.toggle("disabled", !draftOn);
+    el.querySelectorAll("input, select").forEach(i => { i.disabled = !draftOn; });
+  });
   $("f_dmax").disabled = active.length === 0;
   cell.classList.toggle("disabled", active.length === 0);
   if (needDraft && !$("f_draft").value) {
@@ -564,10 +581,12 @@ function fillForm(p) {
   $("f_draft").value = p.draft || "";
   for (const [id, key] of [["f_c","c"],["f_ngl","ngl"],["f_t","t"],["f_np","np"],
                            ["f_b","b"],["f_ub","ub"],["f_port","port"],["f_dmax","draft_n_max"],
+                           ["f_dngl","draft_ngl"],
                            ["f_cram","cache_ram"],["f_temp","temp"],["f_topk","top_k"],
                            ["f_topp","top_p"],["f_minp","min_p"]])
     $(id).value = p[key] || "";
   for (const [id, key] of [["f_fa","fa"],["f_split","split"],["f_ctk","ctk"],["f_ctv","ctv"],
+                           ["f_dctk","draft_ctk"],["f_dctv","draft_ctv"],
                            ["f_load","load_mode"],["f_reasoning","reasoning"]]) {
     const x = p[key] || "";
     $(id).value = [...$(id).options].some(o => o.value === x) ? x : "";
@@ -661,8 +680,8 @@ function fillFromRaw(cmd) {
   const m = cmd.match(/(\S+)\s/);
   cmdBinary = m ? m[1] : "";
   const p = { model: "", mmproj: "", draft: "", c: "", ngl: "", t: "", np: "", b: "", ub: "",
-              port: "", draft_n_max: "", cache_ram: "", temp: "", top_k: "", top_p: "", min_p: "",
-              fa: "", split: "", ctk: "", ctv: "", load_mode: "", spec_type: "", reasoning: "",
+              port: "", draft_n_max: "", draft_ngl: "", cache_ram: "", temp: "", top_k: "", top_p: "", min_p: "",
+              fa: "", split: "", ctk: "", ctv: "", draft_ctk: "", draft_ctv: "", load_mode: "", spec_type: "", reasoning: "",
               alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "",
               metrics: false, no_host: false, no_mmproj_offload: false, custom: "" };
   let rest = cmd.replace(cmdBinary, "");
@@ -675,6 +694,7 @@ function fillFromRaw(cmd) {
   grab(/(?:^|\s)(?:--spec-draft-model|--model-draft|-md)\s+(\S+)/, "draft");
   grab(/(?:^|\s)-c\s+(\S+)/, "c");
   grab(/(?:^|\s)-ngl\s+(\S+)/, "ngl");
+  grab(/(?:^|\s)-ngld\s+(\S+)/, "draft_ngl");
   grab(/(?:^|\s)-t\s+(\S+)/, "t");
   grab(/(?:^|\s)-np\s+(\S+)/, "np");
   grab(/(?:^|\s)-b\s+(\S+)/, "b");
@@ -690,6 +710,8 @@ function fillFromRaw(cmd) {
   grab(/(?:^|\s)--split-mode\s+(\S+)/, "split");
   grab(/(?:^|\s)-ctk\s+(\S+)/, "ctk");
   grab(/(?:^|\s)-ctv\s+(\S+)/, "ctv");
+  grab(/(?:^|\s)-ctkd\s+(\S+)/, "draft_ctk");
+  grab(/(?:^|\s)-ctvd\s+(\S+)/, "draft_ctv");
   grab(/(?:^|\s)--load-mode\s+(\S+)/, "load_mode");
   grab(/(?:^|\s)--spec-type\s+(\S+)/, "spec_type");
   grab(/(?:^|\s)--reasoning\s+(\S+)/, "reasoning");

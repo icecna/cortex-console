@@ -799,12 +799,14 @@ def _save_hist(h):
 NUM_FIELDS = [
     ("-c", "c"), ("-ngl", "ngl"), ("-t", "t"), ("-np", "np"),
     ("-b", "b"), ("-ub", "ub"), ("--port", "port"), ("--spec-draft-n-max", "draft_n_max"),
+    ("-ngld", "draft_ngl"),
     ("--cache-ram", "cache_ram"), ("--temp", "temp"), ("--top-k", "top_k"),
     ("--top-p", "top_p"), ("--min-p", "min_p"),
 ]
 # 下拉菜单：值必须是固定选项之一（选项列表见 admin.html）
 SEL_FIELDS = [
     ("-fa", "fa"), ("--split-mode", "split"), ("-ctk", "ctk"), ("-ctv", "ctv"),
+    ("-ctkd", "draft_ctk"), ("-ctvd", "draft_ctv"),
     ("--load-mode", "load_mode"), ("--spec-type", "spec_type"), ("--reasoning", "reasoning"),
 ]
 TEXT_FIELDS = [
