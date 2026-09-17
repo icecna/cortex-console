@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/themes.css">
 </head>
-<body class="t-dark">
+<body class="t-dark admin-page">
 <header>
   <div class="dot" id="dot"></div>
   <h1>llama-server 管理控制台</h1>
@@ -275,11 +275,11 @@ let es = null;
 
 /* ---------- 主题 ---------- */
 const savedTheme = localStorage.getItem("theme") || "dark";
-document.body.className = "t-" + savedTheme;
+document.body.className = "t-" + savedTheme + " admin-page";
 $("theme").value = savedTheme;
 $("theme").onchange = e => {
   localStorage.setItem("theme", e.target.value);
-  document.body.className = "t-" + e.target.value;
+  document.body.className = "t-" + e.target.value + " admin-page";
 };
 
 /* ---------- 左列标签页 ---------- */

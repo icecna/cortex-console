@@ -198,9 +198,45 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 .fm-item:hover { background: var(--bg); color: var(--accent); }
 .fm-item.dir { color: var(--accent); }
 
+/* 控制台页：左右两列各自独立滚动，页面整体不滚动（滚动左列时右列不动） */
+body.admin-page {
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+body.admin-page #admin_main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+body.admin-page .cols2 {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-rows: 1fr;
+  align-items: stretch;
+}
+body.admin-page .cols2 > .col {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+body.admin-page .cols2 > .col::-webkit-scrollbar { width: 8px; }
+body.admin-page .cols2 > .col::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+body.admin-page .cols2 > .col::-webkit-scrollbar-track { background: transparent; }
+
 @media (max-width: 1250px) {
   .cols { grid-template-columns: 1fr 1fr; }
   .cols2 { grid-template-columns: 1fr; }
+  /* 窄屏恢复整页滚动，不用独立滚动 */
+  body.admin-page { height: auto; overflow: visible; display: block; }
+  body.admin-page #admin_main { display: block; }
+  body.admin-page .cols2 { grid-template-rows: auto; overflow: visible; }
+  body.admin-page .cols2 > .col { overflow: visible; padding-right: 0; }
 }
 @media (max-width: 800px) {
   .cols { grid-template-columns: 1fr; }
