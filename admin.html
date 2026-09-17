@@ -77,8 +77,8 @@
             <button class="btn" onclick="openFileBrowser('f_mmproj')">选择</button>
             <button class="btn" onclick="clearFile('f_mmproj')">清空</button>
           </div>
-          <div class="frow chkrow">
-            <label class="chk" title="多模态投影器不卸载到 GPU"><input type="checkbox" id="f_nommo"> --no-mmproj-offload</label>
+          <div class="frow chkrow" id="row_nommo">
+            <label class="chk" title="多模态投影器不卸载到 GPU（需已设置 --mmproj）"><input type="checkbox" id="f_nommo"> --no-mmproj-offload</label>
           </div>
         </div>
         <div class="fgroup">
@@ -164,13 +164,14 @@
               <label class="flab" title="指定使用的 GPU 设备（可多选，逗号分隔传入）">--device 设备</label>
               <div class="specchk" id="devchk"></div>
             </div>
-            <div class="fcell"><label class="flab" title="多 GPU 切分模式">--split-mode</label>
+            <div class="fcell" id="cell_split"><label class="flab" title="多 GPU 切分模式（≥2 设备时生效）">--split-mode</label>
               <select class="inp grow sel" id="f_split">
                 <option value="">不设置</option><option value="tensor">tensor</option><option value="layer">layer</option><option value="row">row</option><option value="none">none</option>
               </select>
             </div>
-            <div class="fcell"><label class="flab" title="各 GPU 负载分配比例">--tensor-split</label><input class="inp grow" id="f_ts" placeholder="1,1"></div>
+            <div class="fcell" id="cell_ts"><label class="flab" title="各 GPU 负载分配比例（数量需等于设备数）">--tensor-split</label><input class="inp grow" id="f_ts" placeholder="1,1"></div>
           </div>
+          <div class="fhint" id="gpu_hint"></div>
         </div>
         <div class="fgroup">
           <h3>网络与其他</h3>
@@ -397,17 +398,17 @@ function buildCmd() {
   if (v("f_mmproj")) parts.push("--mmproj", v("f_mmproj"));
   if (v("f_draft") && !$("f_draft").disabled) parts.push("--spec-draft", v("f_draft"));
   for (const [id, p] of NUM_IDS) { const x = v(id); if (x) parts.push(p, x); }
-  for (const [id, p] of SEL_IDS) { const x = v(id); if (x) parts.push(p, x); }
+  for (const [id, p] of SEL_IDS) { const x = v(id); if (x && !$(id).disabled) parts.push(p, x); }
   const specActive = SPEC_TYPES.filter(t => t !== "none" && $(specId(t)).checked);
   if ($("f_spec_none").checked || specActive.length) {
     parts.push("--spec-type", $("f_spec_none").checked ? "none" : specActive.join(","));
   }
   const devActive = [...$("devchk").querySelectorAll("input:checked")].map(cb => cb.dataset.dev);
   if (devActive.length) parts.push("--device", devActive.join(","));
-  for (const [id, txt] of CHK_IDS) if ($(id).checked) parts.push(txt);
+  for (const [id, txt] of CHK_IDS) if ($(id).checked && !$(id).disabled) parts.push(txt);
   for (const [id, p] of TXT_IDS) {
     let x = v(id);
-    if (!x) continue;
+    if (!x || $(id).disabled) continue;
     if (id === "f_kwargs" && x.includes("{") && !x.startsWith("'")) x = "'" + x + "'";
     parts.push(p, x);
   }
@@ -458,8 +459,46 @@ function updateSpecUI() {
   }
 }
 
+function updateMultiGPUUI() {
+  const n = [...$("devchk").querySelectorAll("input:checked")].length;
+  const splitCell = $("cell_split"), tsCell = $("cell_ts"), hint = $("gpu_hint");
+  const multi = n >= 2;
+  splitCell.classList.toggle("disabled", !multi);
+  $("f_split").disabled = !multi;
+  tsCell.classList.toggle("disabled", !multi);
+  $("f_ts").disabled = !multi;
+  if (n === 0) {
+    hint.textContent = "未选择 GPU 设备";
+    hint.className = "fhint";
+  } else if (n === 1) {
+    hint.textContent = "单设备：无需设置切分模式与 tensor-split";
+    hint.className = "fhint";
+  } else {
+    const raw = $("f_ts").value.trim();
+    const m = raw ? raw.split(",").map(s => s.trim()).filter(Boolean).length : 0;
+    if (m === 0) {
+      hint.textContent = "已选 " + n + " 个设备 · 未设置 tensor-split（默认均分）";
+      hint.className = "fhint";
+    } else if (m === n) {
+      hint.textContent = "已选 " + n + " 个设备 · tensor-split " + n + " 个比例 ✓";
+      hint.className = "fhint";
+    } else {
+      hint.textContent = "⚠ 已选 " + n + " 个设备，tensor-split 需 " + n + " 个比例（当前 " + m + " 个）";
+      hint.className = "fhint warn";
+    }
+  }
+}
+
+function updateMmUI() {
+  const hasMm = !!$("f_mmproj").value.trim();
+  $("row_nommo").classList.toggle("disabled", !hasMm);
+  $("f_nommo").disabled = !hasMm;
+}
+
 function updatePreview() {
   updateSpecUI();
+  updateMultiGPUUI();
+  updateMmUI();
   const el = $("cmd_preview"), note = $("cmd_diff_note");
   const newCmd = buildCmd();
   if (!newCmd) { el.textContent = "（空）"; note.style.display = "none"; return; }

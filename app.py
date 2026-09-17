@@ -884,7 +884,7 @@ def list_devices():
     return out
 
 def _check_cmd_files(cmd):
-    """保存前校验命令引用的模型文件是否存在于磁盘、投机解码配置是否有效。"""
+    """保存前校验命令引用的模型文件是否存在、投机解码与多 GPU 配置是否有效。"""
     p = parse_cmd(cmd)
     types = [t.strip() for t in (p.get("spec_type") or "").split(",") if t.strip()]
     for t in types:
@@ -893,6 +893,10 @@ def _check_cmd_files(cmd):
     if "none" not in types and any(t in SPEC_NEED_DRAFT for t in types) and not p.get("draft"):
         return ("投机解码类型 " + ",".join(t for t in types if t in SPEC_NEED_DRAFT)
                 + " 需要草稿模型文件（--spec-draft）")
+    devs = [d.strip() for d in (p.get("device") or "").split(",") if d.strip()]
+    ts = [x.strip() for x in (p.get("tensor_split") or "").split(",") if x.strip()]
+    if len(devs) >= 2 and ts and len(ts) != len(devs):
+        return "tensor-split 比例数量（%d）需等于所选设备数（%d）" % (len(ts), len(devs))
     checks = [
         (p.get("model"), "模型文件 (-m)"),
         (p.get("mmproj"), "多模态投影器文件 (--mmproj)"),
