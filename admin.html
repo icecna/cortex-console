@@ -505,6 +505,8 @@ const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_
 const SPEC_TYPES = ["none","draft-mtp","draft-simple","draft-eagle3","draft-dflash","draft-dspark",
                     "ngram-simple","ngram-map-k","ngram-map-k4v","ngram-mod","ngram-cache"];
 const SPEC_NEED_DRAFT = ["draft-simple","draft-eagle3","draft-dflash","draft-dspark"];
+// 互斥组：一个草稿文件只对应一种类型（draft-mtp 指定草稿文件时同理），五选一；ngram-* 可自由搭配
+const SPEC_DRAFT_TYPES = ["draft-mtp", ...SPEC_NEED_DRAFT];
 const specId = t => "f_spec_" + t.replace(/-/g, "_");
 const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","--no-mmproj-offload"],
                  ["f_no_kv_offload","--no-kv-offload"],["f_context_shift","--context-shift"],
@@ -580,10 +582,10 @@ function updateSpecUI() {
   const active = SPEC_TYPES.filter(t => t !== "none" && $(specId(t)).checked);
   const none = $("f_spec_none").checked;
   const row = $("row_draft"), cell = $("cell_dmax"), hint = $("spec_hint");
-  const needDraftList = active.filter(t => SPEC_NEED_DRAFT.includes(t));
+  const needDraft = active.some(t => SPEC_NEED_DRAFT.includes(t));
   const hasMtp = active.includes("draft-mtp");
   const hasNgram = active.some(t => t.startsWith("ngram-"));
-  const draftOn = needDraftList.length > 0 || hasMtp;
+  const draftOn = needDraft || hasMtp;
   row.classList.toggle("disabled", !draftOn);
   row.querySelectorAll("input, button").forEach(el => { el.disabled = !draftOn; });
   document.querySelectorAll(".draft-only").forEach(el => {
@@ -592,16 +594,13 @@ function updateSpecUI() {
   });
   $("f_dmax").disabled = active.length === 0;
   cell.classList.toggle("disabled", active.length === 0);
-  if (needDraftList.length > 1) {
-    hint.textContent = "⚠ 勾选了多个需草稿模型的类型：只能加载一个草稿文件，其余类型会初始化失败";
-    hint.className = "fhint warn";
-  } else if (needDraftList.length === 1 && !$("f_draft").value) {
+  if (needDraft && !$("f_draft").value) {
     hint.textContent = "⚠ 当前类型需要指定草稿模型文件（--model-draft）";
     hint.className = "fhint warn";
   } else if (active.length > 1) {
     hint.textContent = "多选为回退链：每个草稿步按列表顺序取第一个能产出草稿的类型生效";
     hint.className = "fhint";
-  } else if (needDraftList.length === 1) {
+  } else if (needDraft) {
     hint.textContent = "当前类型使用指定的草稿模型";
     hint.className = "fhint";
   } else if (hasMtp) {
@@ -744,6 +743,9 @@ function fillForm(p) {
   const st = (p.spec_type || "").split(",").map(s => s.trim()).filter(s => SPEC_TYPES.includes(s));
   if (st.includes("none")) st.length = 0;
   st.forEach(t => { $(specId(t)).checked = true; });
+  // 旧命令可能含互斥组内的多个类型，归一为第一个（SPEC_TYPES 顺序）
+  SPEC_DRAFT_TYPES.filter(t => $(specId(t)).checked).slice(1)
+    .forEach(t => { $(specId(t)).checked = false; });
   for (const [id, key] of [["f_metrics","metrics"],["f_nohost","no_host"],["f_nommo","no_mmproj_offload"],
                            ["f_no_kv_offload","no_kv_offload"],["f_context_shift","context_shift"],
                            ["f_no_webui","no_webui"]])
@@ -975,7 +977,8 @@ SPEC_TYPES.forEach(t => {
     const el = $(specId(t)), noneEl = $("f_spec_none");
     if (el.checked) {
       if (t === "none") SPEC_TYPES.forEach(t2 => { if (t2 !== "none") $(specId(t2)).checked = false; });
-      else noneEl.checked = false;
+      else if (SPEC_DRAFT_TYPES.includes(t)) SPEC_DRAFT_TYPES.forEach(t2 => { if (t2 !== t) $(specId(t2)).checked = false; });
+      noneEl.checked = false;
     }
     updatePreview();
   };
