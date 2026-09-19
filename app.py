@@ -868,14 +868,6 @@ NUM_FIELDS = [
     ("--seed", "seed"),
     ("--cache-reuse", "cache_reuse"), ("--threads-batch", "threads_batch"),
     ("--image-min-tokens", "image_min_tokens"), ("--image-max-tokens", "image_max_tokens"),
-    ("--spec-ngram-simple-size-n", "ngram_simple_size_n"), ("--spec-ngram-simple-size-m", "ngram_simple_size_m"),
-    ("--spec-ngram-simple-min-hits", "ngram_simple_min_hits"),
-    ("--spec-ngram-map-k-size-n", "ngram_map_k_size_n"), ("--spec-ngram-map-k-size-m", "ngram_map_k_size_m"),
-    ("--spec-ngram-map-k-min-hits", "ngram_map_k_min_hits"),
-    ("--spec-ngram-map-k4v-size-n", "ngram_map_k4v_size_n"), ("--spec-ngram-map-k4v-size-m", "ngram_map_k4v_size_m"),
-    ("--spec-ngram-map-k4v-min-hits", "ngram_map_k4v_min_hits"),
-    ("--spec-ngram-mod-n-min", "ngram_mod_n_min"), ("--spec-ngram-mod-n-max", "ngram_mod_n_max"),
-    ("--spec-ngram-mod-n-match", "ngram_mod_n_match"),
     ("--main-gpu", "main_gpu"), ("--n-cpu-moe", "n_cpu_moe"),
     ("--rope-scale", "rope_scale"),
     ("--threads-http", "threads_http"), ("--timeout", "timeout"),
@@ -1070,10 +1062,7 @@ def list_files(path):
         parent = None
     return {"path": p, "parent": parent, "dirs": dirs, "files": files}
 
-SPEC_TYPES = {"none", "draft-simple", "draft-eagle3", "draft-mtp", "draft-dflash",
-              "draft-dspark", "ngram-simple", "ngram-map-k", "ngram-map-k4v",
-              "ngram-mod", "ngram-cache"}
-SPEC_NEED_DRAFT = {"draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark"}
+SPEC_TYPES = {"none", "draft-mtp"}
 
 def list_devices():
     """列出可用 GPU 设备（nvidia-smi 只读查询，不占用显存、不影响运行中的服务）。"""
@@ -1100,9 +1089,6 @@ def _check_cmd_files(cmd):
     for t in types:
         if t not in SPEC_TYPES:
             return "未知投机解码类型: " + t
-    if "none" not in types and any(t in SPEC_NEED_DRAFT for t in types) and not p.get("draft"):
-        return ("投机解码类型 " + ",".join(t for t in types if t in SPEC_NEED_DRAFT)
-                + " 需要草稿模型文件（--model-draft）")
     devs = [d.strip() for d in (p.get("device") or "").split(",") if d.strip()]
     ts = [x.strip() for x in (p.get("tensor_split") or "").split(",") if x.strip()]
     if len(devs) >= 2 and ts and len(ts) != len(devs):

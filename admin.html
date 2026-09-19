@@ -119,14 +119,9 @@
             <button class="btn" onclick="clearFile('f_draft')">清空</button>
           </div>
           <div class="fgrid">
-            <div class="fcell"><label class="flab" title="投机解码主引擎（五选一）">--spec-type 主引擎</label>
+            <div class="fcell"><label class="flab" title="投机解码类型（使用主模型内置 MTP 头）">--spec-type</label>
               <select class="inp grow sel" id="f_spec_engine">
-                <option value="">禁用</option><option value="draft-mtp">draft-mtp（内置 MTP）</option><option value="draft-simple">draft-simple</option><option value="draft-eagle3">draft-eagle3</option><option value="draft-dflash">draft-dflash</option><option value="draft-dspark">draft-dspark</option>
-              </select>
-            </div>
-            <div class="fcell"><label class="flab" title="n-gram 回退（无需草稿模型，主引擎未产出草稿时生效）">n-gram 回退</label>
-              <select class="inp grow sel" id="f_spec_ngram">
-                <option value="">禁用</option><option value="ngram-simple">ngram-simple</option><option value="ngram-map-k">ngram-map-k</option><option value="ngram-map-k4v">ngram-map-k4v</option><option value="ngram-mod">ngram-mod</option><option value="ngram-cache">ngram-cache</option>
+                <option value="">禁用</option><option value="draft-mtp">draft-mtp（内置 MTP）</option>
               </select>
             </div>
           </div>
@@ -143,26 +138,6 @@
                 <option value="">不设置</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option><option value="iq4_nl">iq4_nl</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="f32">f32</option>
               </select>
             </div>
-          </div>
-          <div class="fgrid" id="grid_ng_simple" style="display:none">
-            <div class="fcell"><label class="flab" title="n-gram 查找长度 N（默认 12）">--spec-ngram-simple-size-n</label><input class="inp grow" id="f_ng_simple_n" type="number"></div>
-            <div class="fcell"><label class="flab" title="草稿 m-gram 长度 M（默认 48）">--spec-ngram-simple-size-m</label><input class="inp grow" id="f_ng_simple_m" type="number"></div>
-            <div class="fcell"><label class="flab" title="最小命中次数（默认 1）">--spec-ngram-simple-min-hits</label><input class="inp grow" id="f_ng_simple_hits" type="number"></div>
-          </div>
-          <div class="fgrid" id="grid_ng_map_k" style="display:none">
-            <div class="fcell"><label class="flab" title="n-gram 查找长度 N（默认 12）">--spec-ngram-map-k-size-n</label><input class="inp grow" id="f_ng_mapk_n" type="number"></div>
-            <div class="fcell"><label class="flab" title="草稿 m-gram 长度 M（默认 48）">--spec-ngram-map-k-size-m</label><input class="inp grow" id="f_ng_mapk_m" type="number"></div>
-            <div class="fcell"><label class="flab" title="最小命中次数（默认 1）">--spec-ngram-map-k-min-hits</label><input class="inp grow" id="f_ng_mapk_hits" type="number"></div>
-          </div>
-          <div class="fgrid" id="grid_ng_map_k4v" style="display:none">
-            <div class="fcell"><label class="flab" title="n-gram 查找长度 N（默认 12）">--spec-ngram-map-k4v-size-n</label><input class="inp grow" id="f_ng_mapk4v_n" type="number"></div>
-            <div class="fcell"><label class="flab" title="草稿 m-gram 长度 M（默认 48）">--spec-ngram-map-k4v-size-m</label><input class="inp grow" id="f_ng_mapk4v_m" type="number"></div>
-            <div class="fcell"><label class="flab" title="最小命中次数（默认 1）">--spec-ngram-map-k4v-min-hits</label><input class="inp grow" id="f_ng_mapk4v_hits" type="number"></div>
-          </div>
-          <div class="fgrid" id="grid_ng_mod" style="display:none">
-            <div class="fcell"><label class="flab" title="最小 ngram token 数（默认 48）">--spec-ngram-mod-n-min</label><input class="inp grow" id="f_ng_mod_nmin" type="number"></div>
-            <div class="fcell"><label class="flab" title="最大 ngram token 数（默认 64）">--spec-ngram-mod-n-max</label><input class="inp grow" id="f_ng_mod_nmax" type="number"></div>
-            <div class="fcell"><label class="flab" title="ngram-mod 查找长度（默认 24）">--spec-ngram-mod-n-match</label><input class="inp grow" id="f_ng_mod_match" type="number"></div>
           </div>
           <div class="fhint" id="spec_hint"></div>
         </div>
@@ -518,16 +493,7 @@ const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_
                  ["f_load","--load-mode"],["f_reasoning","--reasoning"],
                  ["f_reasoning_effort","--reasoning-effort"],["f_reasoning_format","--reasoning-format"],
                  ["f_fit","--fit"],["f_numa","--numa"],["f_rope_scaling","--rope-scaling"]];
-const SPEC_ENGINE_TYPES = ["draft-mtp","draft-simple","draft-eagle3","draft-dflash","draft-dspark"];
-const SPEC_NGRAM_TYPES = ["ngram-simple","ngram-map-k","ngram-map-k4v","ngram-mod","ngram-cache"];
-const SPEC_NEED_DRAFT = SPEC_ENGINE_TYPES.filter(t => t !== "draft-mtp");
-// ngram 各类型专属参数：仅选中对应类型时显示并写入命令
-const NG_PARAMS = {
-  "ngram-simple":  [["f_ng_simple_n","--spec-ngram-simple-size-n"],["f_ng_simple_m","--spec-ngram-simple-size-m"],["f_ng_simple_hits","--spec-ngram-simple-min-hits"]],
-  "ngram-map-k":   [["f_ng_mapk_n","--spec-ngram-map-k-size-n"],["f_ng_mapk_m","--spec-ngram-map-k-size-m"],["f_ng_mapk_hits","--spec-ngram-map-k-min-hits"]],
-  "ngram-map-k4v": [["f_ng_mapk4v_n","--spec-ngram-map-k4v-size-n"],["f_ng_mapk4v_m","--spec-ngram-map-k4v-size-m"],["f_ng_mapk4v_hits","--spec-ngram-map-k4v-min-hits"]],
-  "ngram-mod":     [["f_ng_mod_nmin","--spec-ngram-mod-n-min"],["f_ng_mod_nmax","--spec-ngram-mod-n-max"],["f_ng_mod_match","--spec-ngram-mod-n-match"]],
-};
+const SPEC_ENGINE_TYPES = ["draft-mtp"];
 const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","--no-mmproj-offload"],
                  ["f_no_kv_offload","--no-kv-offload"],["f_context_shift","--context-shift"],
                  ["f_no_webui","--no-webui"]];
@@ -545,9 +511,8 @@ function buildCmd() {
   if (v("f_chat_template_file")) parts.push("--chat-template-file", v("f_chat_template_file"));
   for (const [id, p] of NUM_IDS) { const x = v(id); if (x && !$(id).disabled) parts.push(p, x); }
   for (const [id, p] of SEL_IDS) { const x = v(id); if (x && !$(id).disabled) parts.push(p, x); }
-  const specEng = v("f_spec_engine"), specNg = v("f_spec_ngram");
-  if (specEng || specNg) parts.push("--spec-type", [specEng, specNg].filter(Boolean).join(","));
-  for (const [id, p] of NG_PARAMS[specNg] || []) { const x = v(id); if (x) parts.push(p, x); }
+  const specEng = v("f_spec_engine");
+  if (specEng) parts.push("--spec-type", specEng);
   const devActive = [...$("devchk").querySelectorAll("input:checked")].map(cb => cb.dataset.dev);
   if (devActive.length) parts.push("--device", devActive.join(","));
   for (const [id, txt] of CHK_IDS) if ($(id).checked && !$(id).disabled) parts.push(txt);
@@ -598,26 +563,13 @@ function flashBtn(btn, ok) {
 }
 
 function updateSpecUI() {
-  const eng = $("f_spec_engine").value, ng = $("f_spec_ngram").value;
+  const eng = $("f_spec_engine").value;
   const hint = $("spec_hint");
   const show = (el, on) => { el.style.display = on ? "" : "none"; };
   show($("row_draft"), !!eng);
   show($("grid_spec_draft"), !!eng);
-  for (const t of Object.keys(NG_PARAMS)) show($("grid_ng_" + t.slice(6).replace(/-/g, "_")), ng === t);
-  if (needDraft && !$("f_draft").value) {
-    hint.textContent = "⚠ 当前类型需要指定草稿模型文件（--model-draft）";
-    hint.className = "fhint warn";
-  } else if (eng && ng) {
-    hint.textContent = "n-gram 为主引擎的回退：主引擎未产出草稿时生效";
-    hint.className = "fhint";
-  } else if (eng === "draft-mtp") {
+  if (eng) {
     hint.textContent = "MTP 使用主模型内置头，无需草稿文件（若指定草稿文件则加载该文件）";
-    hint.className = "fhint";
-  } else if (eng) {
-    hint.textContent = "当前类型使用指定的草稿模型";
-    hint.className = "fhint";
-  } else if (ng) {
-    hint.textContent = "n-gram 投机解码（无需草稿模型）";
     hint.className = "fhint";
   } else {
     hint.textContent = "投机解码已禁用";
@@ -749,15 +701,9 @@ function fillForm(p) {
     const x = p[key] || "";
     $(id).value = [...$(id).options].some(o => o.value === x) ? x : "";
   }
-  // 旧命令可能含多个类型，归一：主引擎取第一个，ngram 取第一个
+  // 仅支持 draft-mtp，旧命令中的其他类型会被丢弃
   const st = (p.spec_type || "").split(",").map(s => s.trim()).filter(Boolean);
-  $("f_spec_engine").value = st.find(t => SPEC_ENGINE_TYPES.includes(t)) || "";
-  $("f_spec_ngram").value = st.find(t => SPEC_NGRAM_TYPES.includes(t)) || "";
-  for (const [id, key] of [["f_ng_simple_n","ngram_simple_size_n"],["f_ng_simple_m","ngram_simple_size_m"],["f_ng_simple_hits","ngram_simple_min_hits"],
-                           ["f_ng_mapk_n","ngram_map_k_size_n"],["f_ng_mapk_m","ngram_map_k_size_m"],["f_ng_mapk_hits","ngram_map_k_min_hits"],
-                           ["f_ng_mapk4v_n","ngram_map_k4v_size_n"],["f_ng_mapk4v_m","ngram_map_k4v_size_m"],["f_ng_mapk4v_hits","ngram_map_k4v_min_hits"],
-                           ["f_ng_mod_nmin","ngram_mod_n_min"],["f_ng_mod_nmax","ngram_mod_n_max"],["f_ng_mod_match","ngram_mod_n_match"]])
-    $(id).value = p[key] || "";
+  $("f_spec_engine").value = st.includes("draft-mtp") ? "draft-mtp" : "";
   for (const [id, key] of [["f_metrics","metrics"],["f_nohost","no_host"],["f_nommo","no_mmproj_offload"],
                            ["f_no_kv_offload","no_kv_offload"],["f_context_shift","context_shift"],
                            ["f_no_webui","no_webui"]])
@@ -899,10 +845,6 @@ function fillFromRaw(cmd) {
               numa: "", rope_scaling: "", rope_scale: "",
               threads_http: "", timeout: "", sleep_idle_seconds: "", api_key: "",
               image_min_tokens: "", image_max_tokens: "",
-              ngram_simple_size_n: "", ngram_simple_size_m: "", ngram_simple_min_hits: "",
-              ngram_map_k_size_n: "", ngram_map_k_size_m: "", ngram_map_k_min_hits: "",
-              ngram_map_k4v_size_n: "", ngram_map_k4v_size_m: "", ngram_map_k4v_min_hits: "",
-              ngram_mod_n_min: "", ngram_mod_n_max: "", ngram_mod_n_match: "",
               fa: "", split: "", ctk: "", ctv: "", draft_ctk: "", draft_ctv: "", load_mode: "", spec_type: "", reasoning: "",
               alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "", chat_template_file: "",
               metrics: false, no_host: false, no_mmproj_offload: false, no_kv_offload: false,
@@ -948,18 +890,6 @@ function fillFromRaw(cmd) {
   grab(/(?:^|\s)--sleep-idle-seconds\s+(\S+)/, "sleep_idle_seconds");
   grab(/(?:^|\s)--image-min-tokens\s+(\S+)/, "image_min_tokens");
   grab(/(?:^|\s)--image-max-tokens\s+(\S+)/, "image_max_tokens");
-  grab(/(?:^|\s)--spec-ngram-simple-size-n\s+(\S+)/, "ngram_simple_size_n");
-  grab(/(?:^|\s)--spec-ngram-simple-size-m\s+(\S+)/, "ngram_simple_size_m");
-  grab(/(?:^|\s)--spec-ngram-simple-min-hits\s+(\S+)/, "ngram_simple_min_hits");
-  grab(/(?:^|\s)--spec-ngram-map-k-size-n\s+(\S+)/, "ngram_map_k_size_n");
-  grab(/(?:^|\s)--spec-ngram-map-k-size-m\s+(\S+)/, "ngram_map_k_size_m");
-  grab(/(?:^|\s)--spec-ngram-map-k-min-hits\s+(\S+)/, "ngram_map_k_min_hits");
-  grab(/(?:^|\s)--spec-ngram-map-k4v-size-n\s+(\S+)/, "ngram_map_k4v_size_n");
-  grab(/(?:^|\s)--spec-ngram-map-k4v-size-m\s+(\S+)/, "ngram_map_k4v_size_m");
-  grab(/(?:^|\s)--spec-ngram-map-k4v-min-hits\s+(\S+)/, "ngram_map_k4v_min_hits");
-  grab(/(?:^|\s)--spec-ngram-mod-n-min\s+(\S+)/, "ngram_mod_n_min");
-  grab(/(?:^|\s)--spec-ngram-mod-n-max\s+(\S+)/, "ngram_mod_n_max");
-  grab(/(?:^|\s)--spec-ngram-mod-n-match\s+(\S+)/, "ngram_mod_n_match");
   grab(/(?:^|\s)--api-key\s+('(?:[^']*)'|\S+)/, "api_key");
   grab(/(?:^|\s)-fa\s+(\S+)/, "fa");
   grab(/(?:^|\s)--split-mode\s+(\S+)/, "split");
@@ -998,12 +928,10 @@ $("btn_cmd_copy").onclick = () => {
 };
 [...NUM_IDS.map(x => x[0]), ...SEL_IDS.map(x => x[0]), ...TXT_IDS.map(x => x[0]),
  "f_model", "f_mmproj", "f_draft", "f_chat_template_file", "f_binary", "f_custom",
- "f_spec_engine", "f_spec_ngram",
- "f_ng_simple_n", "f_ng_simple_m", "f_ng_simple_hits", "f_ng_mapk_n", "f_ng_mapk_m", "f_ng_mapk_hits",
- "f_ng_mapk4v_n", "f_ng_mapk4v_m", "f_ng_mapk4v_hits", "f_ng_mod_nmin", "f_ng_mod_nmax", "f_ng_mod_match"]
+ "f_spec_engine"]
   .forEach(id => $(id).addEventListener("input", updatePreview));
 CHK_IDS.forEach(([id]) => $(id).addEventListener("change", updatePreview));
-["f_spec_engine", "f_spec_ngram"].forEach(id => $(id).addEventListener("change", updatePreview));
+$("f_spec_engine").addEventListener("change", updatePreview);
 
 /* ---------- 文件选择弹窗 ---------- */
 function clearFile(id) {
