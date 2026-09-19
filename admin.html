@@ -580,10 +580,10 @@ function updateSpecUI() {
   const active = SPEC_TYPES.filter(t => t !== "none" && $(specId(t)).checked);
   const none = $("f_spec_none").checked;
   const row = $("row_draft"), cell = $("cell_dmax"), hint = $("spec_hint");
-  const needDraft = active.some(t => SPEC_NEED_DRAFT.includes(t));
+  const needDraftList = active.filter(t => SPEC_NEED_DRAFT.includes(t));
   const hasMtp = active.includes("draft-mtp");
   const hasNgram = active.some(t => t.startsWith("ngram-"));
-  const draftOn = needDraft || hasMtp;
+  const draftOn = needDraftList.length > 0 || hasMtp;
   row.classList.toggle("disabled", !draftOn);
   row.querySelectorAll("input, button").forEach(el => { el.disabled = !draftOn; });
   document.querySelectorAll(".draft-only").forEach(el => {
@@ -592,10 +592,16 @@ function updateSpecUI() {
   });
   $("f_dmax").disabled = active.length === 0;
   cell.classList.toggle("disabled", active.length === 0);
-  if (needDraft && !$("f_draft").value) {
+  if (needDraftList.length > 1) {
+    hint.textContent = "⚠ 勾选了多个需草稿模型的类型：只能加载一个草稿文件，其余类型会初始化失败";
+    hint.className = "fhint warn";
+  } else if (needDraftList.length === 1 && !$("f_draft").value) {
     hint.textContent = "⚠ 当前类型需要指定草稿模型文件（--model-draft）";
     hint.className = "fhint warn";
-  } else if (needDraft) {
+  } else if (active.length > 1) {
+    hint.textContent = "多选为回退链：每个草稿步按列表顺序取第一个能产出草稿的类型生效";
+    hint.className = "fhint";
+  } else if (needDraftList.length === 1) {
     hint.textContent = "当前类型使用指定的草稿模型";
     hint.className = "fhint";
   } else if (hasMtp) {
@@ -966,9 +972,11 @@ $("btn_cmd_copy").onclick = () => {
 CHK_IDS.forEach(([id]) => $(id).addEventListener("change", updatePreview));
 SPEC_TYPES.forEach(t => {
   $(specId(t)).onchange = () => {
-    const noneEl = $("f_spec_none");
-    if (noneEl.checked) SPEC_TYPES.forEach(t2 => { if (t2 !== "none") $(specId(t2)).checked = false; });
-    else noneEl.checked = false;
+    const el = $(specId(t)), noneEl = $("f_spec_none");
+    if (el.checked) {
+      if (t === "none") SPEC_TYPES.forEach(t2 => { if (t2 !== "none") $(specId(t2)).checked = false; });
+      else noneEl.checked = false;
+    }
     updatePreview();
   };
 });
