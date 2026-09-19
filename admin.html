@@ -502,16 +502,19 @@ const TXT_IDS = [["f_alias","--alias"],["f_ts","--tensor-split"],
                  ["f_fit_target","--fit-target"],
                  ["f_api_key","--api-key"]];
 
+// 仅当启用投机解码时才输出的草稿相关字段
+const SPEC_DRAFT_IDS = new Set(["f_draft", "f_dmax", "f_dngl", "f_dctk", "f_dctv"]);
 function buildCmd() {
   const v = id => $(id).value.trim();
+  const specEng = v("f_spec_engine");
+  const specOn = !!specEng;
   const parts = [];
   if (v("f_model")) parts.push("-m", v("f_model"));
   if (v("f_mmproj")) parts.push("--mmproj", v("f_mmproj"));
-  if (v("f_draft") && !$("f_draft").disabled) parts.push("--model-draft", v("f_draft"));
+  if (specOn && v("f_draft") && !$("f_draft").disabled) parts.push("--model-draft", v("f_draft"));
   if (v("f_chat_template_file")) parts.push("--chat-template-file", v("f_chat_template_file"));
-  for (const [id, p] of NUM_IDS) { const x = v(id); if (x && !$(id).disabled) parts.push(p, x); }
-  for (const [id, p] of SEL_IDS) { const x = v(id); if (x && !$(id).disabled) parts.push(p, x); }
-  const specEng = v("f_spec_engine");
+  for (const [id, p] of NUM_IDS) { const x = v(id); if (x && !$(id).disabled && (specOn || !SPEC_DRAFT_IDS.has(id))) parts.push(p, x); }
+  for (const [id, p] of SEL_IDS) { const x = v(id); if (x && !$(id).disabled && (specOn || !SPEC_DRAFT_IDS.has(id))) parts.push(p, x); }
   if (specEng) parts.push("--spec-type", specEng);
   const devActive = [...$("devchk").querySelectorAll("input:checked")].map(cb => cb.dataset.dev);
   if (devActive.length) parts.push("--device", devActive.join(","));
