@@ -281,10 +281,10 @@ def _disk_temp_worker():
             if not os.path.exists(dev):
                 continue
             out = _run(["smartctl", "-a", dev], timeout=10)
-        m = re.search(r"(?:Temperature:|Current Drive Temperature:)\s*([0-9]+)", out)
-        # QEMU 虚拟盘报 0，视为不可用
-        if m and int(m.group(1)) > 0:
-            temps[dev] = int(m.group(1))
+            m = re.search(r"(?:Temperature:|Current Drive Temperature:)\s*([0-9]+)", out)
+            # QEMU 虚拟盘报 0，视为不可用
+            if m and int(m.group(1)) > 0:
+                temps[dev] = int(m.group(1))
         _disk_temp = temps
         time.sleep(60)
 
@@ -867,6 +867,7 @@ NUM_FIELDS = [
     ("--frequency-penalty", "frequency_penalty"), ("--repeat-last-n", "repeat_last_n"),
     ("--seed", "seed"),
     ("--cache-reuse", "cache_reuse"), ("--threads-batch", "threads_batch"),
+    ("--image-min-tokens", "image_min_tokens"), ("--image-max-tokens", "image_max_tokens"),
     ("--main-gpu", "main_gpu"), ("--n-cpu-moe", "n_cpu_moe"),
     ("--rope-scale", "rope_scale"),
     ("--threads-http", "threads_http"), ("--timeout", "timeout"),

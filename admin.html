@@ -105,6 +105,10 @@
           <div class="frow chkrow" id="row_nommo">
             <label class="chk" title="多模态投影器不卸载到 GPU（需已设置 --mmproj）"><input type="checkbox" id="f_nommo"> --no-mmproj-offload</label>
           </div>
+          <div class="fgrid">
+            <div class="fcell"><label class="flab" title="每张图片编码的最小 token 数">--image-min-tokens</label><input class="inp grow" id="f_image_min_tokens" type="number"></div>
+            <div class="fcell"><label class="flab" title="每张图片编码的最大 token 数">--image-max-tokens</label><input class="inp grow" id="f_image_max_tokens" type="number"></div>
+          </div>
         </div>
         <div class="fgroup">
           <h3>MTP · 投机解码</h3>
@@ -491,7 +495,8 @@ const NUM_IDS = [["f_c","-c"],["f_ngl","-ngl"],["f_t","-t"],["f_np","-np"],
                  ["f_cache_reuse","--cache-reuse"],["f_threads_batch","--threads-batch"],
                  ["f_main_gpu","--main-gpu"],["f_n_cpu_moe","--n-cpu-moe"],["f_rope_scale","--rope-scale"],
                  ["f_threads_http","--threads-http"],["f_timeout","--timeout"],
-                 ["f_sleep_idle_seconds","--sleep-idle-seconds"]];
+                 ["f_sleep_idle_seconds","--sleep-idle-seconds"],
+                 ["f_image_min_tokens","--image-min-tokens"],["f_image_max_tokens","--image-max-tokens"]];
 const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_ctv","-ctv"],
                  ["f_dctk","-ctkd"],["f_dctv","-ctvd"],
                  ["f_load","--load-mode"],["f_reasoning","--reasoning"],
@@ -718,7 +723,8 @@ function fillForm(p) {
                            ["f_cache_reuse","cache_reuse"],["f_threads_batch","threads_batch"],
                            ["f_main_gpu","main_gpu"],["f_n_cpu_moe","n_cpu_moe"],["f_rope_scale","rope_scale"],
                            ["f_threads_http","threads_http"],["f_timeout","timeout"],
-                           ["f_sleep_idle_seconds","sleep_idle_seconds"]])
+                           ["f_sleep_idle_seconds","sleep_idle_seconds"],
+                           ["f_image_min_tokens","image_min_tokens"],["f_image_max_tokens","image_max_tokens"]])
     $(id).value = p[key] || "";
   for (const [id, key] of [["f_fa","fa"],["f_split","split"],["f_ctk","ctk"],["f_ctv","ctv"],
                            ["f_dctk","draft_ctk"],["f_dctv","draft_ctv"],
@@ -872,6 +878,7 @@ function fillFromRaw(cmd) {
               cache_reuse: "", threads_batch: "", main_gpu: "", n_cpu_moe: "", fit: "", fit_target: "",
               numa: "", rope_scaling: "", rope_scale: "",
               threads_http: "", timeout: "", sleep_idle_seconds: "", api_key: "",
+              image_min_tokens: "", image_max_tokens: "",
               fa: "", split: "", ctk: "", ctv: "", draft_ctk: "", draft_ctv: "", load_mode: "", spec_type: "", reasoning: "",
               alias: "", device: "", tensor_split: "", host: "", chat_kwargs: "", chat_template_file: "",
               metrics: false, no_host: false, no_mmproj_offload: false, no_kv_offload: false,
@@ -915,6 +922,8 @@ function fillFromRaw(cmd) {
   grab(/(?:^|\s)--threads-http\s+(\S+)/, "threads_http");
   grab(/(?:^|\s)--timeout\s+(\S+)/, "timeout");
   grab(/(?:^|\s)--sleep-idle-seconds\s+(\S+)/, "sleep_idle_seconds");
+  grab(/(?:^|\s)--image-min-tokens\s+(\S+)/, "image_min_tokens");
+  grab(/(?:^|\s)--image-max-tokens\s+(\S+)/, "image_max_tokens");
   grab(/(?:^|\s)--api-key\s+('(?:[^']*)'|\S+)/, "api_key");
   grab(/(?:^|\s)-fa\s+(\S+)/, "fa");
   grab(/(?:^|\s)--split-mode\s+(\S+)/, "split");
