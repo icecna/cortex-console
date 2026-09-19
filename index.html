@@ -314,12 +314,12 @@ function render(d) {
   /* --- GPU --- */
   let ghtml = "";
   g.forEach(x => {
-    const eccBad = (x.ecc_ue_vol > 0 || x.ecc_ue_agg > 0);
-    const eccWarn = (x.ecc_ce_vol > 0 || x.ecc_ce_agg > 0);
+    const eccBad = ((x.ecc_ue_vol || 0) > 0 || (x.ecc_ue_agg || 0) > 0);
+    const eccWarn = ((x.ecc_ce_vol || 0) > 0 || (x.ecc_ce_agg || 0) > 0);
     ghtml += '<div class="gpu">' +
       '<div class="gpu-head">GPU ' + x.index + ' <span class="sub">' + x.name + '</span></div>' +
       '<div class="defs">' +
-      '<div class="def"><span class="k">温度</span><span class="v ' + cls(x.temp, 70, 85) + '">' + x.temp + ' °C</span></div>' +
+      '<div class="def"><span class="k">温度</span><span class="v ' + cls(x.temp, 70, 85) + '">' + fmt(x.temp) + ' °C</span></div>' +
       '<div class="def"><span class="k">利用率</span><span class="v">' + fmt(x.util) + '%</span></div>' +
       '<div class="def"><span class="k">显存</span><span class="v">' + fmt(x.vram_used) + ' / ' + fmt(x.vram_total) + ' MiB</span></div>' +
       '<div class="def"><span class="k">功耗</span><span class="v">' + fmt(x.power, 1) + ' W</span></div>' +

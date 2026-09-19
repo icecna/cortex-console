@@ -45,13 +45,7 @@ const THEMES = [
 ];
 
 function spark() {
-  const pts = [];
-  let y = 30;
-  for (let i = 0; i < 24; i++) {
-    y = Math.max(8, Math.min(52, y + Math.sin(i * 1.7) * 14 + Math.cos(i * 0.9) * 8));
-    pts.push((i * (100 / 23)).toFixed(1) + "," + y.toFixed(1));
-  }
-  return '<canvas class="kpi-spark" data-spark="1"></canvas>';
+  return '<canvas class="kpi-spark"></canvas>';
 }
 function drawSparks(root) {
   root.querySelectorAll("canvas.kpi-spark").forEach(c => {
