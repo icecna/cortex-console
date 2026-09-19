@@ -26,7 +26,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "0.0.0.0"
 PORTS = (80, 8090)
-LLAMA = "http://127.0.0.1:8080"  # 兜底地址（--host 未指定或 0.0.0.0 时用回环）
 POLL = 2.0        # 硬件采样间隔
 POLL_LLAMA = 0.5  # llama metrics 采样间隔（速度类指标更跟手）
 HISTORY_LEN = 300  # 10 分钟 @ 2s

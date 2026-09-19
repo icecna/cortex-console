@@ -126,14 +126,14 @@
             </div>
           </div>
           <div class="fgrid" id="grid_spec_draft" style="display:none">
-            <div class="fcell" id="cell_dmax"><label class="flab" title="投机解码最大草稿步数">--spec-draft-n-max</label><input class="inp grow" id="f_dmax" type="number"></div>
-            <div class="fcell draft-only" id="cell_dngl"><label class="flab" title="草稿模型卸载到 GPU 的层数（精确数字 / auto / all）">-ngld 草稿卸载层</label><input class="inp grow" id="f_dngl" placeholder="auto/all"></div>
-            <div class="fcell draft-only" id="cell_dctk"><label class="flab" title="草稿模型 K 缓存量化类型">-ctkd 草稿KV-K</label>
+            <div class="fcell"><label class="flab" title="投机解码最大草稿步数">--spec-draft-n-max</label><input class="inp grow" id="f_dmax" type="number"></div>
+            <div class="fcell"><label class="flab" title="草稿模型卸载到 GPU 的层数（精确数字 / auto / all）">-ngld 草稿卸载层</label><input class="inp grow" id="f_dngl" placeholder="auto/all"></div>
+            <div class="fcell"><label class="flab" title="草稿模型 K 缓存量化类型">-ctkd 草稿KV-K</label>
               <select class="inp grow sel" id="f_dctk">
                 <option value="">不设置</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option><option value="iq4_nl">iq4_nl</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="f32">f32</option>
               </select>
             </div>
-            <div class="fcell draft-only" id="cell_dctv"><label class="flab" title="草稿模型 V 缓存量化类型">-ctvd 草稿KV-V</label>
+            <div class="fcell"><label class="flab" title="草稿模型 V 缓存量化类型">-ctvd 草稿KV-V</label>
               <select class="inp grow sel" id="f_dctv">
                 <option value="">不设置</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option><option value="iq4_nl">iq4_nl</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="f32">f32</option>
               </select>
@@ -493,7 +493,6 @@ const SEL_IDS = [["f_fa","-fa"],["f_split","--split-mode"],["f_ctk","-ctk"],["f_
                  ["f_load","--load-mode"],["f_reasoning","--reasoning"],
                  ["f_reasoning_effort","--reasoning-effort"],["f_reasoning_format","--reasoning-format"],
                  ["f_fit","--fit"],["f_numa","--numa"],["f_rope_scaling","--rope-scaling"]];
-const SPEC_ENGINE_TYPES = ["draft-mtp"];
 const CHK_IDS = [["f_metrics","--metrics"],["f_nohost","--no-host"],["f_nommo","--no-mmproj-offload"],
                  ["f_no_kv_offload","--no-kv-offload"],["f_context_shift","--context-shift"],
                  ["f_no_webui","--no-webui"]];
