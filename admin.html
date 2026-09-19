@@ -909,7 +909,7 @@ function fillFromRaw(cmd) {
   grab(/(?:^|\s)--device\s+(\S+)/, "device");
   grab(/(?:^|\s)--tensor-split\s+(\S+)/, "tensor_split");
   grab(/(?:^|\s)--host\s+(\S+)/, "host");
-  grab(/(?:^|\s)--chat-template-kwargs\s+(\S+)/, "chat_kwargs");
+  grab(/(?:^|\s)--chat-template-kwargs\s+('(?:[^']*)'|"(?:[^"]*)"|\S+)/, "chat_kwargs");
   grab(/(?:^|\s)--chat-template-file\s+(\S+)/, "chat_template_file");
   p.metrics = /(?:^|\s)--metrics(?=\s|$)/.test(rest);
   p.no_host = /(?:^|\s)--no-host(?=\s|$)/.test(rest);
