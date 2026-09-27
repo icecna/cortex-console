@@ -610,15 +610,15 @@ _ninfer_stats = None  # (data, ts, unit)
 
 def ninfer_stats(force=False):
     """解析窗口（最近 2000 行 ≈ 1000 请求）内的 ninfer-serve 请求日志，
-    返回窗口累计量、最近完成请求的逐请求数据、在途请求数。1.5 秒缓存。"""
+    返回窗口累计量、最近完成请求的逐请求数据、在途请求数。0.8 秒缓存。"""
     global _ninfer_stats
     unit = log_unit()
     now = time.monotonic()
-    if not force and _ninfer_stats is not None and now - _ninfer_stats[1] < 1.5 \
+    if not force and _ninfer_stats is not None and now - _ninfer_stats[1] < 0.8 \
             and _ninfer_stats[2] == unit:
         return _ninfer_stats[0]
-    data = {"prompt": 0, "gen": 0, "cache": 0, "requests": 0, "last": None, "processing": 0,
-            "tput": None}
+    data = {"prompt": 0, "gen": 0, "cache": 0, "requests": 0, "gen_sec": 0.0, "last": None,
+            "processing": 0, "tput": None}
     submitted, finished = {}, set()
     year = time.localtime().tm_year
     out = _run(["journalctl", "-u", unit, "-n", "2000", "--no-pager", "-q"], timeout=6)
@@ -627,8 +627,9 @@ def ninfer_stats(force=False):
         if m:
             data["tput"] = {"prefill_tps": float(m.group(1)) if m.group(1) else 0.0,
                              "decode_tps": float(m.group(2)) if m.group(2) else 0.0,
+                             "running": int(m.group(3)),
                              "prefilling": int(m.group(4)),
-                             "waiting": int(m.group(5)),
+                             "waiting": int(m.group(6)),
                              "ts": _line_ts(line, year)}
             continue
         m = _NINFER_DONE_RE.search(line)
@@ -637,6 +638,9 @@ def ninfer_stats(force=False):
             data["gen"] += int(m.group(4))
             data["cache"] += int(m.group(5))
             data["requests"] += 1
+            # 累计 decode 时间（排除 prefill/等待），用于窗口平均生成速度
+            data["gen_sec"] += (int(m.group(4)) / float(m.group(8))) \
+                if m.group(8) else 0.0
             data["last"] = {
                 "finish": m.group(2), "prompt": int(m.group(3)), "gen": int(m.group(4)),
                 "cache": int(m.group(5)), "ttft_ms": int(m.group(6)),
@@ -661,31 +665,42 @@ def ninfer_stats(force=False):
         m = _NINFER_REJECT_RE.search(line)
         if m:
             finished.add(m.group(1))
-    data["processing"] = sum(1 for r in submitted if r not in finished)
+    # 在途请求：优先用吞吐行里服务端自报的 running+prefilling（10 秒内权威值，
+    # 避免长请求 done 行滚出窗口时窗口法把已完成请求误算为处理中）；
+    # 无近期吞吐行（请求全部结束或无日志）时回退窗口推算
+    tput = data["tput"]
+    if tput and tput["ts"] is not None and 0 <= time.time() - tput["ts"] <= 10:
+        data["processing"] = tput["running"] + tput["prefilling"]
+    else:
+        data["processing"] = sum(1 for r in submitted if r not in finished)
     _ninfer_stats = (data, now, unit)
     return data
 
 def ninfer_log_speeds():
     """与 llama_log_speeds 同形：gen = 最近完成请求（decode 速度 + prefill 速度）；
-    gen_live = 完成后 10 秒内的点（ninfer 日志无生成中实时速度行，速度曲线在请求
-    结束时更新）；prefill_live = 最近 10 秒吞吐行里 prefill > 0（等待首 token 时的
-    实时 prefill 速度，5s 更新）。"""
+    gen_live = 最近 10 秒吞吐行的实时 decode 速度（5s 一行，生成中持续更新）；
+    prefill_live = 最近 10 秒吞吐行里 prefill > 0（等待首 token 时的实时 prefill 速度，5s 更新）。"""
     d = ninfer_stats()
     last = d["last"]
     out = {"prompt": None, "gen": None, "gen_live": None, "prefill_live": None}
     tput = d.get("tput")
-    if (tput and tput["ts"] is not None and tput["prefill_tps"] > 0
+    if (tput and tput["ts"] is not None
             and 0 <= time.time() - tput["ts"] <= 10):
-        out["prefill_live"] = {"tps": tput["prefill_tps"], "ts": tput["ts"],
-                                "prefilling": tput["prefilling"],
-                                "waiting": tput["waiting"]}
+        if tput["decode_tps"] > 0:
+            out["gen_live"] = {"n_gen": None, "tg": tput["decode_tps"],
+                                "tg_3s": tput["decode_tps"]}
+        if tput["prefill_tps"] > 0:
+            out["prefill_live"] = {"tps": tput["prefill_tps"], "ts": tput["ts"],
+                                    "prefilling": tput["prefilling"],
+                                    "waiting": tput["waiting"]}
     if last and last["ts"] is not None:
         out["gen"] = {"ms": last["wall_s"] * 1000.0, "tokens": last["gen"],
                       "tps": last["decode_tps"], "prefill_tps": last["prefill_tps"],
                       "ts": last["ts"]}
-        # decode=n/a（如 gen<=1）时无生成速度，不出实时点
-        if (last["decode_tps"] is not None
-                and 0 <= time.time() - last["ts"] <= 10):
+        # decode=n/a（如 gen<=1）时无生成速度，不出实时点；吞吐行已给出
+        # 实时速度时不覆盖（连续请求间隔 <10s 时 done 行是上一请求的旧值）
+        if last["decode_tps"] is not None and out["gen_live"] is None \
+                and 0 <= time.time() - last["ts"] <= 10:
             out["gen_live"] = {"n_gen": last["gen"], "tg": last["decode_tps"],
                                "tg_3s": last["decode_tps"]}
     return out
@@ -705,7 +720,9 @@ def ninfer_metrics():
             "tok_per_round": last.get("tok_per_round"),
         },
         "tokens": {"prompt": d["prompt"], "cached": d["cache"], "predicted": d["gen"],
-                    "predicted_seconds": None, "max_seq": None},
+                    # 窗口内（≈1000 请求）平均 decode 速度：总 gen tokens / 总 decode 时间
+                    "predicted_seconds": (d["gen_sec"] if d["gen_sec"] > 0 else None),
+                    "max_seq": None},
         "requests": {"processing": d["processing"],
                       "deferred": (d["tput"]["waiting"]
                                    if d["tput"] and d["tput"]["ts"] is not None
@@ -714,14 +731,22 @@ def ninfer_metrics():
 
 _ninfer_props_cache, _ninfer_props_ts = None, 0.0
 
+_health_cache = (None, 0.0)  # (result, ts) 10s 缓存：推理服务 hang 时避免 /health 阻塞采样线程
+
 def api_health():
     """探测推理服务 /health（进程在但模型加载/API 未就绪时 ok=False）。"""
+    global _health_cache
+    now = time.time()
+    if _health_cache[0] is not None and now - _health_cache[1] < 10:
+        return _health_cache[0]
     t0 = time.time()
     try:
         with urllib.request.urlopen(llama_base() + "/health", timeout=2) as r:
-            return {"ok": r.status == 200, "ms": int((time.time() - t0) * 1000)}
+            res = {"ok": r.status == 200, "ms": int((time.time() - t0) * 1000)}
     except Exception:
-        return {"ok": False, "ms": None}
+        res = {"ok": False, "ms": None}
+    _health_cache = (res, now)
+    return res
 
 def ninfer_props():
     """ninfer-serve 模型信息：model ID 从 /v1/models；参数从进程 cmdline 解析（30s 缓存）。"""
@@ -758,6 +783,12 @@ def ninfer_props():
     _ninfer_props_cache = props
     _ninfer_props_ts = time.time()
     return props
+
+def loadavg():
+    try:
+        return [round(float(x), 2) for x in open("/proc/loadavg").read().split()[:3]]
+    except Exception:
+        return None
 
 # ---------------- 快照 + 历史 ----------------
 
@@ -819,7 +850,7 @@ def snapshot(m=None):
         "cpu": {
             "usage": c,
             "cores": NPROC,
-            "load": [round(float(x), 2) for x in open("/proc/loadavg").read().split()[:3]],
+            "load": loadavg(),
             "temp": _cpu_temp,
         },
         "mem": memd,
@@ -877,6 +908,9 @@ def _check_password(pw):
 def admin_login(pw):
     """成功返回 (token, None)，失败返回 (None, 错误信息)。"""
     now = time.time()
+    # 顺手清理过期 token，避免残留
+    for t in [t for t, exp in _tokens.items() if now > exp]:
+        _tokens.pop(t, None)
     _login_fail_ts[:] = [t for t in _login_fail_ts if now - t < 60]
     if len(_login_fail_ts) >= 5:
         return None, "失败次数过多，60 秒后再试"
