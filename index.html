@@ -72,6 +72,7 @@
       <h2>推理服务 · 模型参数</h2>
       <div class="defs">
         <div class="def"><span class="k">状态</span><span class="v" id="svc_status">—</span></div>
+        <div class="def"><span class="k">框架</span><span class="v" id="svc_fw">—</span></div>
         <div class="def"><span class="k">模型</span><span class="v" id="svc_model">—</span></div>
         <div class="def"><span class="k">量化</span><span class="v" id="svc_ftype">—</span></div>
         <div class="def"><span class="k">上下文</span><span class="v" id="svc_ctx">—</span></div>
@@ -284,6 +285,7 @@ function render(d) {
   /* --- 推理服务 --- */
   $("svc_status").textContent = L.up ? "运行中" : "未运行";
   $("svc_status").className = "v " + (L.up ? "ok" : "bad");
+  $("svc_fw").textContent = BE === "ninfer" ? "NInfer" : (BE === "llama" ? "llama.cpp" : "—");
   $("svc_model").textContent = p.alias || "—";
   $("svc_ftype").textContent = p.ftype || "—";
   $("svc_ctx").textContent = p.n_ctx ? fmt(p.n_ctx) : "—";
