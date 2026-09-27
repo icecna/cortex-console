@@ -28,7 +28,7 @@
 <div id="login_box" class="loginbox">
   <div class="login-ico">⚙️</div>
   <h2>管理员登录</h2>
-  <p class="login-sub">llama-server 管理控制台</p>
+  <p class="login-sub">推理服务管理控制台</p>
   <input class="inp" id="login_pw" type="password" placeholder="管理密码" autocomplete="current-password">
   <button class="btn primary" id="btn_login">登 录</button>
   <div class="msg bad" id="login_err"></div>
@@ -48,6 +48,7 @@
         <h2><span class="sico">🛠️</span>服务控制</h2>
         <div class="defs">
           <div class="def"><span class="k">状态</span><span class="v big" id="svc_state">—</span></div>
+          <div class="def"><span class="k">控制目标</span><span class="v" id="svc_unit">—</span></div>
           <div class="def"><span class="k">PID</span><span class="v big" id="svc_pid">—</span></div>
           <div class="def"><span class="k">启动时间</span><span class="v" id="svc_started">—</span></div>
           <div class="def"><span class="k">模型睡眠</span><span class="v" id="svc_sleep">—</span></div>
@@ -75,6 +76,17 @@
       </section>
       </div>
       <div class="tabpanel active" id="tab_params">
+      <div id="cmd_readonly" style="display:none">
+        <section class="section">
+          <h2><span class="sico">⚙️</span>启动参数</h2>
+          <div class="msg warn">当前后端为 NInfer，启动参数由 launcher 脚本（/mnt/models/ai-launchers/ninfer-v100-duo.sh）与仓库默认值管理，本页只读。切换后端：编辑 /etc/ai-server.conf 后 systemctl restart ai-server。</div>
+          <div class="cmd" id="cmd_readonly_box">—</div>
+          <div class="btnrow" style="margin-top:10px">
+            <button class="btn" id="btn_readonly_copy">复制命令</button>
+          </div>
+        </section>
+      </div>
+      <div id="cmd_edit_area">
       <section class="section">
         <h2><span class="sico">⚙️</span>启动参数</h2>
         <div class="fgroup">
@@ -294,6 +306,7 @@
         <div class="msg" id="cmd_msg"></div>
       </section>
       </div>
+      </div>
       <div class="tabpanel" id="tab_pw">
       <section class="section">
         <h2><span class="sico">🔑</span>修改密码</h2>
@@ -427,6 +440,7 @@ async function refreshService() {
     const j = await api("/api/admin/service");
     $("svc_state").textContent = j.active + (j.sub ? " / " + j.sub : "");
     $("svc_state").className = "v big " + (j.active === "active" ? "ok" : "bad");
+    $("svc_unit").textContent = j.unit || "—";
     $("svc_pid").textContent = j.pid || "—";
     $("svc_started").textContent = j.started || "—";
     $("dot").className = "dot" + (j.active === "active" ? "" : " down");
@@ -440,7 +454,7 @@ async function refreshService() {
 }
 
 async function doAction(action, label) {
-  if (!confirm("确定要" + label + " llama-server 吗？")) return;
+  if (!confirm("确定要" + label + "推理服务吗？")) return;
   $("svc_msg").textContent = label + "中…";
   try {
     const j = await api("/api/admin/service", { action });
@@ -753,16 +767,23 @@ async function loadDevices() {
 
 async function loadCmd() {
   if (!token) return;
+  let j;
+  try { j = await api("/api/admin/cmd"); } catch (e) { return; }
+  if (j.readonly) {
+    $("cmd_edit_area").style.display = "none";
+    $("cmd_readonly").style.display = "";
+    $("cmd_readonly_box").textContent = j.current || "—";
+    return;
+  }
+  $("cmd_edit_area").style.display = "";
+  $("cmd_readonly").style.display = "none";
   await loadDevices();
-  try {
-    const j = await api("/api/admin/cmd");
-    cmdBinary = (j.parsed && j.parsed.binary) || "";
-    $("f_binary").value = cmdBinary;
-    cmdCurrent = j.current || "";
-    cmdHist = j.history || [];
-    if (j.parsed) fillForm(j.parsed);
-    renderHist();
-  } catch (e) {}
+  cmdBinary = (j.parsed && j.parsed.binary) || "";
+  $("f_binary").value = cmdBinary;
+  cmdCurrent = j.current || "";
+  cmdHist = j.history || [];
+  if (j.parsed) fillForm(j.parsed);
+  renderHist();
 }
 function renderHist() {
   const box = $("hist_list");
@@ -791,7 +812,7 @@ function renderHist() {
 
 async function saveCmd(restart) {
   const label = restart ? "保存并重启" : "保存";
-  if (restart && !confirm("保存后将重启 llama-server，确定继续？")) return;
+  if (restart && !confirm("保存后将重启服务，确定继续？")) return;
   $("cmd_msg").textContent = label + "中…";
   try {
     const j = await api("/api/admin/cmd", { cmd: buildCmd(), restart });
@@ -921,6 +942,9 @@ function fillFromRaw(cmd) {
   fillForm(p);
 }
 $("btn_cmd_revert").onclick = loadCmd;
+$("btn_readonly_copy").onclick = function () {
+  copyText($("cmd_readonly_box").textContent).then(ok => flashBtn($("btn_readonly_copy"), ok));
+};
 $("btn_cmd_save").onclick = () => saveCmd(false);
 $("btn_cmd_save_restart").onclick = () => saveCmd(true);
 $("btn_cmd_copy").onclick = () => {
@@ -1003,13 +1027,17 @@ $("btn_test").onclick = async () => {
     if (!j.ok) { $("test_status").textContent = j.error; $("test_status").className = "msg bad"; return; }
     const wall = (Date.now() - t0) / 1000;
     let mtpStr = "";
-    if (j.mtp && j.mtp.draft_tokens > 0) {
-      mtpStr = " · MTP 接受率 " + j.mtp.accept + "%（" + j.mtp.accepted + "/" + j.mtp.draft_tokens + "）";
+    if (j.mtp && j.mtp.accept != null) {
+      mtpStr = " · MTP 接受率 " + j.mtp.accept + "%" +
+        (j.mtp.draft_tokens ? "（" + j.mtp.accepted + "/" + j.mtp.draft_tokens + "）"
+          : (j.mtp.tok_per_round ? " · " + j.mtp.tok_per_round + " tok/round" : ""));
     }
+    const tps = j.timing.predicted_per_second
+      ? j.timing.predicted_per_second.toFixed(1) + " t/s（服务端计时）"
+      : "—";
     $("test_status").textContent =
-      "完成 · " + (j.timing.predicted_n || 0) + " tok · " +
-      (j.timing.predicted_per_second ? j.timing.predicted_per_second.toFixed(1) : "—") +
-      " t/s（服务端计时）· 端到端 " + wall.toFixed(1) + " s" + mtpStr;
+      "完成 · " + (j.timing.predicted_n || 0) + " tok · " + tps +
+      " · 端到端 " + wall.toFixed(1) + " s" + mtpStr;
     $("test_status").className = "msg ok";
     $("test_out").textContent = j.content || "";
   } catch (e) { $("test_status").textContent = e.message; $("test_status").className = "msg bad"; }
@@ -1074,7 +1102,7 @@ $("log_dl").onclick = e => {
   const a = document.createElement("a");
   a.href = "/api/admin/logs/download?token=" + encodeURIComponent(token) +
            "&n=2000&prio=" + $("log_prio").value;
-  a.download = "llama-server.log";
+  a.download = "ai-server.log";
   a.click();
 };
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""llama.cpp + 硬件监控 Dashboard（纯标准库，无依赖）
+"""推理服务 + 硬件监控 Dashboard（纯标准库，无依赖）
 
-后台每 2 秒采样一次：
-  - llama-server /metrics  (吞吐、MTP 投机解码接受率)
-  - llama-server /props    (模型参数)
+自动探测后端（llama-server / ninfer-serve），数据源：
+  - llama-server: /metrics (吞吐、MTP 逐位置接受率) + /props (模型参数)
+  - ninfer-serve: journalctl 请求日志 (速度、整体接受率) + /v1/models
   - nvidia-smi             (GPU 温度/利用率/显存/功耗/ECC)
   - /proc                  (CPU/内存/磁盘 IO/进程)
   - EDAC                   (系统内存 ECC)
@@ -47,45 +47,91 @@ def _get(url, timeout=3):
     except Exception:
         return None
 
-def _llama_cmdline():
-    """读 llama-server 进程的真实启动命令（cmdline），找不到返回 None。
-    只读 /proc，不触碰 CPU 采样状态（_proc_prev）。"""
+# ---------------- 推理后端探测（llama-server / ninfer-serve） ----------------
+
+_BACKEND_COMM = {"llama-server": "llama", "ninfer-serve": "ninfer"}
+_svc = {"backend": None, "pid": None, "unit": None, "ts": 0.0}
+
+def _proc_unit(pid):
+    """进程所属 systemd 单元（/proc/<pid>/cgroup）；非 systemd 启动返回 None。"""
+    try:
+        with open("/proc/%d/cgroup" % pid) as f:
+            for line in f:
+                parts = line.strip().split(":")
+                if len(parts) == 3:
+                    m = re.search(r"([\w][\w.-]*\.service)$", parts[2])
+                    if m:
+                        return m.group(1)[:-len(".service")]
+    except Exception:
+        pass
+    return None
+
+def detect_service():
+    """扫 /proc 找运行中的推理进程（llama-server 或 ninfer-serve），5 秒缓存。
+    返回 (backend, pid, unit)；未运行返回 (None, None, None)。"""
+    global _svc
+    now = time.monotonic()
+    if _svc["ts"] and now - _svc["ts"] < 5:
+        return _svc["backend"], _svc["pid"], _svc["unit"]
+    backend, pid, unit = None, None, None
     for p in os.listdir("/proc"):
         if not p.isdigit():
             continue
         try:
             with open("/proc/%s/comm" % p) as f:
-                if f.read().strip() != "llama-server":
-                    continue
-            with open("/proc/%s/cmdline" % p, "rb") as f:
-                return f.read().replace(b"\0", b" ").decode().strip()
+                comm = f.read().strip()
+            if comm in _BACKEND_COMM:
+                backend, pid = _BACKEND_COMM[comm], int(p)
+                unit = _proc_unit(pid)
+                break
         except Exception:
             continue
-    return None
+    _svc.update(backend=backend, pid=pid, unit=unit, ts=now)
+    return backend, pid, unit
+
+def log_unit():
+    """journalctl 查询用单元名：优先运行进程的单元，未运行时回退 ai-server（默认入口）。"""
+    _, _, unit = detect_service()
+    return unit or "ai-server"
+
+def _proc_cmdline(pid):
+    if pid is None:
+        return None
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            return f.read().replace(b"\0", b" ").decode().strip()
+    except Exception:
+        return None
+
+def _last_flag(cmd, flag):
+    """cmd 中 flag 最后一次出现的取值（ninfer 的 cmdline 里 launcher 默认值
+    可能被后续参数覆盖，以最后一次为准）。"""
+    hits = re.findall(r"(?:^|\s)" + re.escape(flag) + r"\s+(\S+)", cmd or "")
+    return hits[-1] if hits else None
 
 _llama_base = None  # (url, ts) 缓存，避免每次探测都重读 /proc
 
 def llama_base():
-    """解析 llama-server 实际监听地址，构造本机可访问的 base URL（带缓存）。
-    优先读进程 cmdline（真实运行命令），回退到单元文件 ExecStart。
+    """解析推理服务实际监听地址，构造本机可访问的 base URL（带缓存）。
+    优先读进程 cmdline（真实运行命令）；llama-server 未运行时回退单元文件
+    ExecStart；否则用默认 127.0.0.1:8080。
     --host 为 0.0.0.0/::/空 时用 127.0.0.1，否则用 --host 指定的地址。"""
     global _llama_base
     now = time.monotonic()
     if _llama_base is not None and now - _llama_base[1] < 5:
         return _llama_base[0]
     host, port = "127.0.0.1", 8080
-    cmd = _llama_cmdline() or _read_unit_cmd()
+    backend, pid, _ = detect_service()
+    cmd = _proc_cmdline(pid)
+    if cmd is None and backend is None:
+        cmd = _read_unit_cmd()  # llama-server 未运行回退；ninfer 未运行用默认地址
     if cmd:
-        d = parse_cmd(cmd)
-        h = d.get("host")
+        h = _last_flag(cmd, "--host")
         if h and h not in ("0.0.0.0", "::", "[::]"):
             host = h
-        p = d.get("port")
-        if p:
-            try:
-                port = int(p)
-            except (TypeError, ValueError):
-                pass
+        p = _last_flag(cmd, "--port")
+        if p and p.isdigit():
+            port = int(p)
     url = "http://%s:%d" % (host, port)
     _llama_base = (url, now)
     return url
@@ -302,18 +348,9 @@ def _cpu_temp_worker():
 _proc_prev = None
 
 def llama_proc():
+    """推理进程（llama-server / ninfer-serve）的 CPU / 内存 / 运行时长。"""
     global _proc_prev
-    pid = None
-    for p in os.listdir("/proc"):
-        if not p.isdigit():
-            continue
-        try:
-            with open("/proc/%s/comm" % p) as f:
-                if f.read().strip() == "llama-server":
-                    pid = int(p)
-                    break
-        except Exception:
-            pass
+    _, pid, _ = detect_service()
     if pid is None:
         _proc_prev = None
         return None
@@ -328,11 +365,11 @@ def llama_proc():
         return {"pid": pid}
     now = time.monotonic()
     cpu = None
-    if _proc_prev is not None:
+    if _proc_prev is not None and _proc_prev[2] == pid:
         dt = now - _proc_prev[1]
         if dt > 0:
             cpu = max(0.0, (ticks - _proc_prev[0]) / 100.0 / dt * 100.0)
-    _proc_prev = (ticks, now)
+    _proc_prev = (ticks, now, pid)
     up = None
     try:
         with open("/proc/uptime") as f:
@@ -360,6 +397,12 @@ _llama_prev = None
 _gen_hold = None  # (tps, ts) 最近一次非零生成速度，用于结束后短暂保留显示
 
 def llama_metrics():
+    backend, _, _ = detect_service()
+    if backend == "ninfer":
+        return ninfer_metrics()
+    return _llama_metrics()
+
+def _llama_metrics():
     global _llama_prev, _gen_hold
     text = _get(llama_base() + "/metrics")
     if text is None:
@@ -430,6 +473,11 @@ _MONTHS = {m: i + 1 for i, m in enumerate(
      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
 
 def llama_log_speeds():
+    if detect_service()[0] == "ninfer":
+        return ninfer_log_speeds()
+    return _llama_log_speeds()
+
+def _llama_log_speeds():
     """解析 llama-server 日志里它自己测的填充/生成速度：
     - 生成中每 3s:  n_gen = N, tg = X t/s, tg_3s = Y t/s
     - 请求结束:      prompt eval time = A ms / N tokens (X tokens per second)
@@ -469,23 +517,38 @@ def llama_log_speeds():
 _log_err = None  # (data, ts)
 
 def log_error_counts(hours=24, cache=30):
-    """统计最近 N 小时 llama-server 日志里 错误(err 及以上) / 警告(纯 warning) 的行数（带缓存）。"""
+    """统计最近 N 小时推理服务日志里 错误 / 警告 的行数（带缓存）。
+    llama 用 journalctl -p 按优先级过滤；ninfer 的级别写在正文（[error]/[warning]），
+    systemd 统一按 warning 记录，需按正文匹配。"""
     global _log_err
     now = time.monotonic()
     if _log_err is not None and _log_err[0].get("hours") == hours and now - _log_err[1] < cache:
         return _log_err[0]
-    def _count(prio):
-        out = _run(["journalctl", "-u", "llama-server", "-p", prio,
-                    "--since", "%d hours ago" % hours, "--no-pager", "-q"], timeout=8)
-        return len([l for l in out.splitlines() if l.strip()]) if out else 0
-    err = _count("err")
-    warn = max(0, _count("warning") - err)  # -p warning 含 err，减去得纯 warning
+    unit = log_unit()
+    if detect_service()[0] == "ninfer":
+        out = _run(["journalctl", "-u", unit, "--since", "%d hours ago" % hours,
+                    "--no-pager", "-q"], timeout=10)
+        lines = [l for l in out.splitlines() if l.strip()] if out else []
+        err = sum(1 for l in lines if "[error]" in l)
+        warn = sum(1 for l in lines if "[warning]" in l)
+    else:
+        def _count(prio):
+            out = _run(["journalctl", "-u", unit, "-p", prio,
+                        "--since", "%d hours ago" % hours, "--no-pager", "-q"], timeout=8)
+            return len([l for l in out.splitlines() if l.strip()]) if out else 0
+        err = _count("err")
+        warn = max(0, _count("warning") - err)  # -p warning 含 err，减去得纯 warning
     _log_err = ({"err": err, "warn": warn, "hours": hours}, now)
     return _log_err[0]
 
 _props_cache, _props_ts = None, 0
 
 def llama_props():
+    if detect_service()[0] == "ninfer":
+        return ninfer_props()
+    return _llama_props()
+
+def _llama_props():
     global _props_cache, _props_ts
     if _props_cache is not None and time.time() - _props_ts < 30:
         return _props_cache
@@ -508,6 +571,154 @@ def llama_props():
     _props_ts = time.time()
     return _props_cache
 
+# ---------------- ninfer-serve 数据（无 /metrics：日志解析 + /v1/models） ----------------
+
+# 请求完成行，例：
+#   [req 3] done finish=stop_token prompt=19833 gen=72 cache=19774 reuse=append_frontier
+#     ttft=436ms prefill=158.5tok/s decode=76.3tok/s wall=1.37s speculative=mtp 2.73tok/round (57.7%)
+_NINFER_DONE_RE = re.compile(
+    r"\[req (\d+)\] done finish=(\S+)(?: tool_calls=\d+)? prompt=(\d+) gen=(\d+) cache=(\d+) "
+    r"reuse=\S+ ttft=(\d+)ms prefill=(?:(\d+(?:\.\d+)?)tok/s|n/a) decode=(?:(\d+(?:\.\d+)?)tok/s|n/a) "
+    r"wall=(\d+(?:\.\d+)?)s(?: speculative=off| speculative=(\S+) (\d+(?:\.\d+)?|n/a)tok/round"
+    r"(?: \((\d+(?:\.\d+)?)%\))?)?")
+_NINFER_START_RE = re.compile(r"\[req (\d+)\] [\w-]+ (?:stream|non-stream).*→ submitted")
+_NINFER_ERR_RE = re.compile(r"\[req (\d+)\] error")
+_NINFER_TS_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\.\d{3}\]")
+
+def _line_ts(line, year):
+    """日志行时间戳（秒）。优先 ninfer 行内嵌的 [YYYY-mm-dd HH:MM:SS.mmm]，
+    否则 journal 前缀（英文月份名），都无返回 None。"""
+    m = _NINFER_TS_RE.search(line)
+    if m:
+        y, mo, dd = (int(x) for x in m.group(1).split("-"))
+        hh, mi, ss = (int(x) for x in m.group(2).split(":"))
+        return time.mktime((y, mo, dd, hh, mi, ss, 0, 0, -1))
+    m = re.match(r"(\w{3}) +(\d{1,2}) (\d{2}:\d{2}:\d{2})", line)
+    if m:
+        mm = _MONTHS.get(m.group(1))
+        if mm:
+            hh, mi, ss = (int(x) for x in m.group(3).split(":"))
+            return time.mktime((year, mm, int(m.group(2)), hh, mi, ss, 0, 0, -1))
+    return None
+
+_ninfer_stats = None  # (data, ts, unit)
+
+def ninfer_stats(force=False):
+    """解析窗口（最近 2000 行 ≈ 1000 请求）内的 ninfer-serve 请求日志，
+    返回窗口累计量、最近完成请求的逐请求数据、在途请求数。1.5 秒缓存。"""
+    global _ninfer_stats
+    unit = log_unit()
+    now = time.monotonic()
+    if not force and _ninfer_stats is not None and now - _ninfer_stats[1] < 1.5 \
+            and _ninfer_stats[2] == unit:
+        return _ninfer_stats[0]
+    data = {"prompt": 0, "gen": 0, "cache": 0, "requests": 0, "last": None, "processing": 0}
+    submitted, finished = {}, set()
+    year = time.localtime().tm_year
+    out = _run(["journalctl", "-u", unit, "-n", "2000", "--no-pager", "-q"], timeout=6)
+    for line in out.splitlines():
+        m = _NINFER_DONE_RE.search(line)
+        if m:
+            data["prompt"] += int(m.group(3))
+            data["gen"] += int(m.group(4))
+            data["cache"] += int(m.group(5))
+            data["requests"] += 1
+            data["last"] = {
+                "finish": m.group(2), "prompt": int(m.group(3)), "gen": int(m.group(4)),
+                "cache": int(m.group(5)), "ttft_ms": int(m.group(6)),
+                "prefill_tps": float(m.group(7)) if m.group(7) else None,
+                "decode_tps": float(m.group(8)) if m.group(8) else None,
+                "wall_s": float(m.group(9)),
+                "mtp_backend": m.group(10),
+                "tok_per_round": float(m.group(11)) if m.group(11) not in (None, "n/a") else None,
+                "accept_pct": float(m.group(12)) if m.group(12) else None,
+                "ts": _line_ts(line, year),
+            }
+            finished.add(m.group(1))
+            continue
+        m = _NINFER_START_RE.search(line)
+        if m:
+            submitted[m.group(1)] = _line_ts(line, year)
+            continue
+        m = _NINFER_ERR_RE.search(line)
+        if m:
+            finished.add(m.group(1))
+    data["processing"] = sum(1 for r in submitted if r not in finished)
+    _ninfer_stats = (data, now, unit)
+    return data
+
+def ninfer_log_speeds():
+    """与 llama_log_speeds 同形：gen = 最近完成请求（decode 速度 + prefill 速度）；
+    gen_live = 完成后 10 秒内的点（ninfer 日志无生成中实时速度行，速度曲线在请求
+    结束时更新）。"""
+    last = ninfer_stats()["last"]
+    out = {"prompt": None, "gen": None, "gen_live": None}
+    if last and last["ts"] is not None:
+        out["gen"] = {"ms": last["wall_s"] * 1000.0, "tokens": last["gen"],
+                      "tps": last["decode_tps"], "prefill_tps": last["prefill_tps"],
+                      "ts": last["ts"]}
+        if 0 <= time.time() - last["ts"] <= 10:
+            out["gen_live"] = {"n_gen": last["gen"], "tg": last["decode_tps"],
+                               "tg_3s": last["decode_tps"]}
+    return out
+
+def ninfer_metrics():
+    """按 llama metrics 同形组装：窗口累计 tokens + 最近请求速度/接受率。
+    无逐位置接受率、无验证步/草稿 token 累计（日志只有逐请求汇总），相应字段为 None。"""
+    d = ninfer_stats()
+    last = d["last"] or {}
+    return {
+        "gen_tps": None, "gen_hold": None, "prompt_tps": None, "gen_tps_avg": None,
+        "mtp": {
+            "accept": last.get("accept_pct"),
+            "accept_inst": None,
+            "pos": {},
+            "drafts": None, "draft_tokens": None, "accepted": None,
+            "tok_per_round": last.get("tok_per_round"),
+        },
+        "tokens": {"prompt": d["prompt"], "cached": d["cache"], "predicted": d["gen"],
+                    "predicted_seconds": None, "max_seq": None},
+        "requests": {"processing": d["processing"], "deferred": None},
+    }
+
+_ninfer_props_cache, _ninfer_props_ts = None, 0.0
+
+def ninfer_props():
+    """ninfer-serve 模型信息：model ID 从 /v1/models；参数从进程 cmdline 解析（30s 缓存）。"""
+    global _ninfer_props_cache, _ninfer_props_ts
+    if _ninfer_props_cache is not None and time.time() - _ninfer_props_ts < 30:
+        return _ninfer_props_cache
+    props = {"alias": None, "ftype": None, "path": None, "n_ctx": None, "slots": None,
+             "modalities": {"text": True, "vision": False}, "sleeping": False}
+    try:
+        j = json.loads(_get(llama_base() + "/v1/models") or "")
+        data = j.get("data") or []
+        if data:
+            props["alias"] = data[0].get("id")
+    except Exception:
+        pass
+    backend, pid, _ = detect_service()
+    if backend == "ninfer" and pid is not None:
+        cmd = _proc_cmdline(pid) or ""
+        m = re.search(r"(\S+\.ninfer)", cmd)
+        if m:
+            props["path"] = m.group(1)
+            base = os.path.basename(m.group(1)).lower()
+            if "nvfp4" in base:
+                props["ftype"] = "NVFP4"
+            elif "groupwise" in base or "int" in base:
+                props["ftype"] = "groupwise-int"
+        ctx = _last_flag(cmd, "--max-context")
+        if ctx and ctx.isdigit():
+            props["n_ctx"] = int(ctx)
+        conc = _last_flag(cmd, "--max-concurrency")
+        if conc and conc.isdigit():
+            props["slots"] = int(conc)
+        props["modalities"]["vision"] = re.search(r"(?:^|\s)--vision(?=\s|$)", cmd) is not None
+    _ninfer_props_cache = props
+    _ninfer_props_ts = time.time()
+    return props
+
 # ---------------- 快照 + 历史 ----------------
 
 _history = {k: [] for k in (
@@ -524,12 +735,13 @@ def _push(d):
             del h[:len(h) - HISTORY_LEN]
 
 def snapshot(m=None):
+    backend = detect_service()[0]
     props = dict(llama_props())  # 拷贝，避免把派生的 n_ctx 写回共享缓存
     if m is None:
         m = llama_metrics()
     proc = llama_proc()
-    # /props 没有 n_ctx，从启动命令 -c 解析
-    if props.get("n_ctx") is None and proc and proc.get("cmdline"):
+    # /props 没有 n_ctx，从启动命令 -c 解析（ninfer 的 props 已含 --max-context）
+    if backend == "llama" and props.get("n_ctx") is None and proc and proc.get("cmdline"):
         cm = re.search(r"(?:^|\s)-c\s+(\d+)", proc["cmdline"])
         if cm:
             props["n_ctx"] = int(cm.group(1))
@@ -559,7 +771,9 @@ def snapshot(m=None):
 
     return {
         "t": time.time(),
-        "llama": {"up": m is not None, "props": props, "metrics": m, "proc": proc,
+        "llama": {"backend": backend or "none",
+                  "up": (m is not None) if backend == "llama" else (backend == "ninfer"),
+                  "props": props, "metrics": m, "proc": proc,
                   "log": log, "log_err": log_error_counts()},
         "cpu": {
             "usage": c,
@@ -645,9 +859,15 @@ def change_password(old, new):
     os.replace(tmp, ADMIN_FILE)
     return None
 
+def _ctrl_unit():
+    """服务控制目标单元：优先运行进程所属单元，未运行时用 ai-server（默认入口）。"""
+    _, _, unit = detect_service()
+    return unit or "ai-server"
+
 def service_info():
     # 不用 --value：多属性时输出顺序不保证，按 Key=Value 解析
-    out = _run(["systemctl", "show", "llama-server",
+    unit = _ctrl_unit()
+    out = _run(["systemctl", "show", unit,
                 "-p", "ActiveState", "-p", "SubState", "-p", "MainPID",
                 "-p", "ExecMainStartTimestamp"], timeout=5)
     d = {}
@@ -660,12 +880,13 @@ def service_info():
         "sub": d.get("SubState", ""),
         "pid": int(d["MainPID"]) if d.get("MainPID", "0").isdigit() and d["MainPID"] != "0" else None,
         "started": d.get("ExecMainStartTimestamp", "") or "",
+        "unit": unit,
     }
 
 def service_action(action):
     if action not in ("start", "stop", "restart"):
         return {"ok": False, "error": "未知操作"}
-    r = subprocess.run(["systemctl", action, "llama-server"],
+    r = subprocess.run(["systemctl", action, _ctrl_unit()],
                        capture_output=True, text=True, timeout=120)
     time.sleep(1)  # 等状态落定再读
     info = service_info()
@@ -724,7 +945,26 @@ def logs_tail(n, prio, since_hours=None):
     except (TypeError, ValueError):
         n = 200
     n = max(1, min(5000, n))
-    cmd = ["journalctl", "-u", "llama-server", "-n", str(n), "-p", prio, "--no-pager", "-q"]
+    unit = log_unit()
+    if detect_service()[0] == "ninfer":
+        # ninfer 日志级别写在正文（[error]/[warning]），journalctl -p 无法过滤，
+        # 取足量后按正文筛选
+        factor = 4 if prio != "info" else 1
+        cmd = ["journalctl", "-u", unit, "-n", str(n * factor), "--no-pager", "-q"]
+        if since_hours:
+            try:
+                h = int(since_hours)
+            except (TypeError, ValueError):
+                h = 0
+            if h > 0:
+                cmd += ["--since", "%d hours ago" % h]
+        lines = _run(cmd, timeout=10).splitlines()
+        if prio == "err":
+            lines = [l for l in lines if "[error]" in l]
+        elif prio == "warning":
+            lines = [l for l in lines if "[error]" in l or "[warning]" in l]
+        return "\n".join(lines[:n])
+    cmd = ["journalctl", "-u", unit, "-n", str(n), "-p", prio, "--no-pager", "-q"]
     if since_hours:
         try:
             h = int(since_hours)
@@ -745,6 +985,9 @@ def _spec_counters():
             "accepted": s.get("llamacpp:spec_decode_num_accepted_tokens_total", 0)}
 
 def test_generation(prompt, n_predict):
+    backend, _, _ = detect_service()
+    if backend == "ninfer":
+        return _ninfer_test_generation(prompt, n_predict)
     try:
         n_predict = int(n_predict)
     except (TypeError, ValueError):
@@ -779,6 +1022,43 @@ def test_generation(prompt, n_predict):
                 "draft_n": t.get("draft_n"),
             },
             "mtp": mtp}
+
+def _ninfer_test_generation(prompt, n_predict):
+    """ninfer 快速测试：/v1/chat/completions + 从日志最近 done 行取回服务端计时
+    （按生成 token 数匹配，max-concurrency=1 时基本准确）。"""
+    try:
+        n_predict = int(n_predict)
+    except (TypeError, ValueError):
+        n_predict = 64
+    n_predict = max(1, min(1024, n_predict))
+    model = ninfer_props().get("alias") or ""
+    body = json.dumps({"model": model, "stream": False, "max_tokens": n_predict,
+                       "messages": [{"role": "user", "content": prompt}]}).encode()
+    req = urllib.request.Request(llama_base() + "/v1/chat/completions", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            j = json.loads(r.read().decode())
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+    try:
+        content = j["choices"][0]["message"].get("content", "")
+    except (KeyError, IndexError, TypeError):
+        return {"ok": False, "error": "响应格式异常"}
+    usage = j.get("usage") or {}
+    time.sleep(0.5)  # 等日志 done 行落盘
+    last = ninfer_stats(force=True).get("last")
+    timing = {"prompt_n": usage.get("prompt_tokens"), "prompt_ms": None,
+              "predicted_n": usage.get("completion_tokens"), "predicted_ms": None,
+              "predicted_per_second": None, "draft_n": None}
+    mtp = None
+    if (last and last.get("gen") == usage.get("completion_tokens")
+            and last.get("ts") is not None and time.time() - last["ts"] < 10):
+        timing["predicted_per_second"] = last["decode_tps"]
+        timing["predicted_ms"] = max(0.0, last["wall_s"] - last["ttft_ms"] / 1000.0) * 1000.0
+        if last.get("accept_pct") is not None:
+            mtp = {"accept": last["accept_pct"], "tok_per_round": last.get("tok_per_round")}
+    return {"ok": True, "content": content, "timing": timing, "mtp": mtp}
 
 # ---------------- 启动参数（systemd 单元 + 历史） ----------------
 
@@ -979,6 +1259,13 @@ def diff_brief(cmd, cur):
     return " · ".join(parts)
 
 def cmd_info():
+    backend, pid, _ = detect_service()
+    if backend == "ninfer":
+        # Q2-a：NInfer 启动参数由 launcher 脚本管理，管理页只读展示
+        return {"backend": "ninfer", "readonly": True,
+                "current": _proc_cmdline(pid)
+                           or "（服务未运行；启动后此处显示实际启动命令）",
+                "parsed": None, "history": []}
     cur = _read_unit_cmd()
     h = _load_hist()
     if cur and (not h or h[0].get("cmd") != cur):
@@ -1107,6 +1394,9 @@ def _check_cmd_files(cmd):
     return None
 
 def cmd_save(new_cmd, restart=False):
+    if detect_service()[0] == "ninfer":
+        return {"ok": False,
+                "error": "NInfer 后端的启动参数由 /mnt/models/ai-launchers/ninfer-v100-duo.sh 管理，不可在管理页编辑"}
     new_cmd = " ".join(new_cmd.split())
     if not new_cmd or "llama-server" not in new_cmd:
         return {"ok": False, "error": "命令为空或不含 llama-server"}
@@ -1174,16 +1464,23 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def _sse_logs(self, prio):
-        """SSE 实时推送 journalctl -f 输出。"""
+        """SSE 实时推送 journalctl -f 输出（ninfer 的级别写在正文，需按正文过滤）。"""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        p = subprocess.Popen(
-            ["journalctl", "-u", "llama-server", "-f", "-p", prio, "--no-pager", "-q"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        ninfer = detect_service()[0] == "ninfer"
+        cmd = ["journalctl", "-u", log_unit(), "-f", "--no-pager", "-q"]
+        if not ninfer:
+            cmd += ["-p", prio]
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         try:
             for line in p.stdout:
+                if ninfer:
+                    if prio == "err" and "[error]" not in line:
+                        continue
+                    if prio == "warning" and "[error]" not in line and "[warning]" not in line:
+                        continue
                 self.wfile.write(("data: " + line.rstrip("\n") + "\n\n").encode())
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
