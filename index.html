@@ -244,15 +244,19 @@ function render(d) {
   const cumStr = cumAvg != null ? "累计平均 " + fmt(cumAvg, 1) + " t/s" : "";
   // 速度取日志里服务端自测值（metrics 计数器只在请求结束时跳变，生成中恒为 0）
   const live = LG && LG.gen_live;
+  const pf = LG && LG.prefill_live;
   const genWin = BE === "ninfer" ? 60 : 15;
   const lastGen = LG && LG.gen && LG.gen.ts != null && (d.t - LG.gen.ts) <= genWin;
   if (live) {
     $("k_gen").innerHTML = '<span class="num">' + fmt(live.tg, 1) + '</span><span class="u">t/s</span>';
     $("k_gen_sub").textContent = (BE === "ninfer" ? "整请求 " : "3s ") + fmt(live.tg_3s, 1) + " t/s" + (cumStr ? " · " + cumStr : "");
+  } else if (pf && pf.ts != null && (d.t - pf.ts) <= 10) {
+    $("k_gen").innerHTML = '<span class="num">' + fmt(pf.tps, 1) + '</span><span class="u">t/s</span>';
+    $("k_gen_sub").textContent = "prefill 中" + (pf.waiting ? " · 排队 " + pf.waiting : "") + (cumStr ? " · " + cumStr : "");
   } else if (lastGen) {
     $("k_gen").innerHTML = '<span class="num dim">' + fmt(LG.gen.tps, 1) + '</span><span class="u">t/s</span>';
-    const pf = LG.gen.prefill_tps != null ? " · prefill " + fmt(LG.gen.prefill_tps, 1) + " t/s" : "";
-    $("k_gen_sub").textContent = "刚结束" + pf + (cumStr ? " · " + cumStr : "");
+    const pf2 = LG.gen.prefill_tps != null ? " · prefill " + fmt(LG.gen.prefill_tps, 1) + " t/s" : "";
+    $("k_gen_sub").textContent = "刚结束" + pf2 + (cumStr ? " · " + cumStr : "");
   } else {
     $("k_gen").innerHTML = '<span class="num dim">空闲</span>';
     $("k_gen_sub").textContent = cumStr;

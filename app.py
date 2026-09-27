@@ -583,7 +583,12 @@ _NINFER_DONE_RE = re.compile(
     r"(?: \((\d+(?:\.\d+)?)%\))?)?")
 _NINFER_START_RE = re.compile(r"\[req (\d+)\] [\w-]+ (?:stream|non-stream).*→ submitted")
 _NINFER_ERR_RE = re.compile(r"\[req (\d+)\] error")
+_NINFER_REJECT_RE = re.compile(r"\[req (\d+)\] rejected")
 _NINFER_TS_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\.\d{3}\]")
+# 服务端每 5s 一次的调度吞吐行（生成中/prefill 中实时速度）
+_NINFER_TPUT_RE = re.compile(
+    r"throughput interval=[\d.]+s prefill=(?:(\d+(?:\.\d+)?)tok/s|n/a) decode=(?:(\d+(?:\.\d+)?)tok/s|n/a) "
+    r"running=(\d+) prefilling=(\d+) decode_ready=(\d+) waiting=(\d+)")
 
 def _line_ts(line, year):
     """日志行时间戳（秒）。优先 ninfer 行内嵌的 [YYYY-mm-dd HH:MM:SS.mmm]，
@@ -612,11 +617,20 @@ def ninfer_stats(force=False):
     if not force and _ninfer_stats is not None and now - _ninfer_stats[1] < 1.5 \
             and _ninfer_stats[2] == unit:
         return _ninfer_stats[0]
-    data = {"prompt": 0, "gen": 0, "cache": 0, "requests": 0, "last": None, "processing": 0}
+    data = {"prompt": 0, "gen": 0, "cache": 0, "requests": 0, "last": None, "processing": 0,
+            "tput": None}
     submitted, finished = {}, set()
     year = time.localtime().tm_year
     out = _run(["journalctl", "-u", unit, "-n", "2000", "--no-pager", "-q"], timeout=6)
     for line in out.splitlines():
+        m = _NINFER_TPUT_RE.search(line)
+        if m:
+            data["tput"] = {"prefill_tps": float(m.group(1)) if m.group(1) else 0.0,
+                             "decode_tps": float(m.group(2)) if m.group(2) else 0.0,
+                             "prefilling": int(m.group(4)),
+                             "waiting": int(m.group(5)),
+                             "ts": _line_ts(line, year)}
+            continue
         m = _NINFER_DONE_RE.search(line)
         if m:
             data["prompt"] += int(m.group(3))
@@ -643,6 +657,10 @@ def ninfer_stats(force=False):
         m = _NINFER_ERR_RE.search(line)
         if m:
             finished.add(m.group(1))
+            continue
+        m = _NINFER_REJECT_RE.search(line)
+        if m:
+            finished.add(m.group(1))
     data["processing"] = sum(1 for r in submitted if r not in finished)
     _ninfer_stats = (data, now, unit)
     return data
@@ -650,9 +668,17 @@ def ninfer_stats(force=False):
 def ninfer_log_speeds():
     """与 llama_log_speeds 同形：gen = 最近完成请求（decode 速度 + prefill 速度）；
     gen_live = 完成后 10 秒内的点（ninfer 日志无生成中实时速度行，速度曲线在请求
-    结束时更新）。"""
-    last = ninfer_stats()["last"]
-    out = {"prompt": None, "gen": None, "gen_live": None}
+    结束时更新）；prefill_live = 最近 10 秒吞吐行里 prefill > 0（等待首 token 时的
+    实时 prefill 速度，5s 更新）。"""
+    d = ninfer_stats()
+    last = d["last"]
+    out = {"prompt": None, "gen": None, "gen_live": None, "prefill_live": None}
+    tput = d.get("tput")
+    if (tput and tput["ts"] is not None and tput["prefill_tps"] > 0
+            and 0 <= time.time() - tput["ts"] <= 10):
+        out["prefill_live"] = {"tps": tput["prefill_tps"], "ts": tput["ts"],
+                                "prefilling": tput["prefilling"],
+                                "waiting": tput["waiting"]}
     if last and last["ts"] is not None:
         out["gen"] = {"ms": last["wall_s"] * 1000.0, "tokens": last["gen"],
                       "tps": last["decode_tps"], "prefill_tps": last["prefill_tps"],
