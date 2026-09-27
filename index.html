@@ -228,7 +228,7 @@ function render(d) {
   const BE = L.backend || "llama";
   $("dot").className = "dot" + (L.up ? "" : " down");
   const p = L.props || {};
-  $("model").textContent = p.alias || (BE === "ninfer" ? "ninfer-serve" : "llama-server");
+  $("model").textContent = p.alias || (BE === "ninfer" ? "ninfer-serve" : BE === "llama" ? "llama-server" : "服务未运行");
   const mods = p.modalities ? Object.keys(p.modalities).filter(k => p.modalities[k]).join("/") : null;
   $("modelsub").textContent = [p.ftype, p.n_ctx ? "ctx " + fmt(p.n_ctx) : null,
     p.slots ? p.slots + " slots" : null, mods].filter(Boolean).join(" · ");

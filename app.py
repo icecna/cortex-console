@@ -113,8 +113,8 @@ _llama_base = None  # (url, ts) 缓存，避免每次探测都重读 /proc
 
 def llama_base():
     """解析推理服务实际监听地址，构造本机可访问的 base URL（带缓存）。
-    优先读进程 cmdline（真实运行命令）；llama-server 未运行时回退单元文件
-    ExecStart；否则用默认 127.0.0.1:8080。
+    读进程 cmdline（真实运行命令）；服务未运行时回退 llama-server 单元文件
+    ExecStart，再无则默认 127.0.0.1:8080。
     --host 为 0.0.0.0/::/空 时用 127.0.0.1，否则用 --host 指定的地址。"""
     global _llama_base
     now = time.monotonic()
@@ -683,7 +683,9 @@ def ninfer_log_speeds():
         out["gen"] = {"ms": last["wall_s"] * 1000.0, "tokens": last["gen"],
                       "tps": last["decode_tps"], "prefill_tps": last["prefill_tps"],
                       "ts": last["ts"]}
-        if 0 <= time.time() - last["ts"] <= 10:
+        # decode=n/a（如 gen<=1）时无生成速度，不出实时点
+        if (last["decode_tps"] is not None
+                and 0 <= time.time() - last["ts"] <= 10):
             out["gen_live"] = {"n_gen": last["gen"], "tg": last["decode_tps"],
                                "tg_3s": last["decode_tps"]}
     return out
@@ -732,7 +734,7 @@ def ninfer_props():
             base = os.path.basename(m.group(1)).lower()
             if "nvfp4" in base:
                 props["ftype"] = "NVFP4"
-            elif "groupwise" in base or "int" in base:
+            elif "groupwise" in base:
                 props["ftype"] = "groupwise-int"
         ctx = _last_flag(cmd, "--max-context")
         if ctx and ctx.isdigit():
@@ -989,7 +991,8 @@ def logs_tail(n, prio, since_hours=None):
             lines = [l for l in lines if "[error]" in l]
         elif prio == "warning":
             lines = [l for l in lines if "[error]" in l or "[warning]" in l]
-        return "\n".join(lines[:n])
+        # journalctl -n 返回最近 N 行（时间升序），过滤后取尾部 = 最新的 n 行
+        return "\n".join(lines[-n:])
     cmd = ["journalctl", "-u", unit, "-n", str(n), "-p", prio, "--no-pager", "-q"]
     if since_hours:
         try:
@@ -1058,6 +1061,8 @@ def _ninfer_test_generation(prompt, n_predict):
         n_predict = 64
     n_predict = max(1, min(1024, n_predict))
     model = ninfer_props().get("alias") or ""
+    if not model:
+        return {"ok": False, "error": "无法获取模型 ID（/v1/models 未响应）"}
     body = json.dumps({"model": model, "stream": False, "max_tokens": n_predict,
                        "messages": [{"role": "user", "content": prompt}]}).encode()
     req = urllib.request.Request(llama_base() + "/v1/chat/completions", data=body,
@@ -1072,8 +1077,14 @@ def _ninfer_test_generation(prompt, n_predict):
     except (KeyError, IndexError, TypeError):
         return {"ok": False, "error": "响应格式异常"}
     usage = j.get("usage") or {}
-    time.sleep(0.5)  # 等日志 done 行落盘
-    last = ninfer_stats(force=True).get("last")
+    # done 行要经 journald 落盘，轮询等待（最多 ~3s）
+    last = None
+    for _ in range(6):
+        time.sleep(0.5)
+        last = ninfer_stats(force=True).get("last")
+        if last and last.get("gen") == usage.get("completion_tokens") \
+                and last.get("ts") is not None and time.time() - last["ts"] < 10:
+            break
     timing = {"prompt_n": usage.get("prompt_tokens"), "prompt_ms": None,
               "predicted_n": usage.get("completion_tokens"), "predicted_ms": None,
               "predicted_per_second": None, "draft_n": None}
