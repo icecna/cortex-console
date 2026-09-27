@@ -83,7 +83,7 @@
         <div class="def"><span class="k">进程内存</span><span class="v" id="svc_rss">—</span></div>
         <div class="def"><span class="k">运行时间</span><span class="v" id="svc_up">—</span></div>
       </div>
-      <div class="subhead">生成统计</div>
+      <div class="subhead">生成统计 <span class="sub" id="stat_scope"></span></div>
       <div class="defs">
         <div class="def"><span class="k">Prompt tokens</span><span class="v" id="gen_tok_prompt">—</span></div>
         <div class="def"><span class="k">缓存命中</span><span class="v" id="gen_tok_cached">—</span></div>
@@ -226,7 +226,8 @@ function render(d) {
   if (!d || !d.llama) return;
   const L = d.llama, M = L.metrics;
   const BE = L.backend || "llama";
-  $("dot").className = "dot" + (L.up ? "" : " down");
+  const H = L.health || { ok: false };
+  $("dot").className = "dot" + (L.up ? (H.ok ? "" : " loading") : " down");
   const p = L.props || {};
   $("model").textContent = p.alias || (BE === "ninfer" ? "ninfer-serve" : BE === "llama" ? "llama-server" : "服务未运行");
   const mods = p.modalities ? Object.keys(p.modalities).filter(k => p.modalities[k]).join("/") : null;
@@ -287,8 +288,8 @@ function render(d) {
   chart($("k_mem_c"), [{ color: "#f85149", data: d.history.ram }], 100, 30);
 
   /* --- 推理服务 --- */
-  $("svc_status").textContent = L.up ? "运行中" : "未运行";
-  $("svc_status").className = "v " + (L.up ? "ok" : "bad");
+  $("svc_status").textContent = L.up ? (H.ok ? "运行中" : "加载中") : "未运行";
+  $("svc_status").className = "v " + (L.up ? (H.ok ? "ok" : "warn") : "bad");
   $("svc_fw").textContent = BE === "ninfer" ? "NInfer" : (BE === "llama" ? "llama.cpp" : "—");
   $("svc_model").textContent = p.alias || "—";
   $("svc_ftype").textContent = p.ftype || "—";
@@ -313,10 +314,13 @@ function render(d) {
     $("mtp_drafttok").textContent = fmt(t.draft_tokens);
     $("mtp_acc").textContent = fmt(t.accepted);
     $("gen_tok_prompt").textContent = fmt(M.tokens.prompt);
-    $("gen_tok_cached").textContent = fmt(M.tokens.cached);
+    const cached = M.tokens.cached, prompt = M.tokens.prompt;
+    $("gen_tok_cached").textContent = (cached != null ? fmt(cached) : "—") +
+      (prompt > 0 ? "（" + fmt(100 * cached / prompt, 1) + "%）" : "");
     $("gen_tok_pred").textContent = fmt(M.tokens.predicted);
     $("gen_tok_max").textContent = fmt(M.tokens.max_seq);
   }
+  $("stat_scope").textContent = BE === "ninfer" ? "窗口累计 · 近 ~1000 请求" : "";
 
   /* --- 近期日志 (journalctl，最近 24 小时) --- */
   const LE = L.log_err;

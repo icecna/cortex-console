@@ -706,10 +706,22 @@ def ninfer_metrics():
         },
         "tokens": {"prompt": d["prompt"], "cached": d["cache"], "predicted": d["gen"],
                     "predicted_seconds": None, "max_seq": None},
-        "requests": {"processing": d["processing"], "deferred": None},
+        "requests": {"processing": d["processing"],
+                      "deferred": (d["tput"]["waiting"]
+                                   if d["tput"] and d["tput"]["ts"] is not None
+                                   and 0 <= time.time() - d["tput"]["ts"] <= 10 else None)},
     }
 
 _ninfer_props_cache, _ninfer_props_ts = None, 0.0
+
+def api_health():
+    """探测推理服务 /health（进程在但模型加载/API 未就绪时 ok=False）。"""
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(llama_base() + "/health", timeout=2) as r:
+            return {"ok": r.status == 200, "ms": int((time.time() - t0) * 1000)}
+    except Exception:
+        return {"ok": False, "ms": None}
 
 def ninfer_props():
     """ninfer-serve 模型信息：model ID 从 /v1/models；参数从进程 cmdline 解析（30s 缓存）。"""
@@ -801,6 +813,7 @@ def snapshot(m=None):
         "t": time.time(),
         "llama": {"backend": backend or "none",
                   "up": (m is not None) if backend == "llama" else (backend == "ninfer"),
+                  "health": api_health() if backend else {"ok": False, "ms": None},
                   "props": props, "metrics": m, "proc": proc,
                   "log": log, "log_err": log_error_counts()},
         "cpu": {
