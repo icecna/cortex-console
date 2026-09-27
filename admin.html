@@ -121,7 +121,7 @@
           <div class="fgrid">
             <div class="fcell"><label class="flab" title="投机解码类型（使用主模型内置 MTP 头）">--spec-type</label>
               <select class="inp grow sel" id="f_spec_engine">
-                <option value="">禁用</option><option value="draft-mtp">draft-mtp（内置 MTP）</option>
+                <option value="">禁用</option><option value="draft-mtp">draft-mtp（内置 MTP）</option><option value="draft-dflash">draft-dflash（DFlash 草稿模型）</option>
               </select>
             </div>
           </div>
@@ -703,9 +703,9 @@ function fillForm(p) {
     const x = p[key] || "";
     $(id).value = [...$(id).options].some(o => o.value === x) ? x : "";
   }
-  // 仅支持 draft-mtp，旧命令中的其他类型会被丢弃
+  // 仅支持 draft-mtp / draft-dflash，旧命令中的其他类型会被丢弃
   const st = (p.spec_type || "").split(",").map(s => s.trim()).filter(Boolean);
-  $("f_spec_engine").value = st.includes("draft-mtp") ? "draft-mtp" : "";
+  $("f_spec_engine").value = st.includes("draft-mtp") ? "draft-mtp" : (st.includes("draft-dflash") ? "draft-dflash" : "");
   for (const [id, key] of [["f_metrics","metrics"],["f_nohost","no_host"],["f_nommo","no_mmproj_offload"],
                            ["f_no_kv_offload","no_kv_offload"],["f_context_shift","context_shift"],
                            ["f_no_webui","no_webui"]])

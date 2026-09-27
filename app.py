@@ -1061,7 +1061,7 @@ def list_files(path):
         parent = None
     return {"path": p, "parent": parent, "dirs": dirs, "files": files}
 
-SPEC_TYPES = {"none", "draft-mtp"}
+SPEC_TYPES = {"none", "draft-mtp", "draft-dflash"}
 
 def list_devices():
     """列出可用 GPU 设备（nvidia-smi 只读查询，不占用显存、不影响运行中的服务）。"""
