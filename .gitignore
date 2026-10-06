@@ -2,3 +2,5 @@ __pycache__/
 admin.json
 cmd_history.json
 *.pyc
+nohup.out
+*.log
