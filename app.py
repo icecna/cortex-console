@@ -184,24 +184,29 @@ def cpu_usage():
 # ---------------- 内存 ----------------
 
 def mem():
-    info = {}
-    with open("/proc/meminfo") as f:
-        for line in f:
-            k, v = line.split(":", 1)
-            info[k.strip()] = int(v.strip().split()[0])  # kB
-    total = info["MemTotal"] / 1048576
-    avail = info.get("MemAvailable", 0) / 1048576
-    used = total - avail
-    st = info.get("SwapTotal", 0) / 1048576
-    sf = info.get("SwapFree", 0) / 1048576
-    return {
-        "total_gb": round(total, 1),
-        "used_gb": round(used, 1),
-        "avail_gb": round(avail, 1),
-        "pct": round(100 * used / total, 1) if total else 0,
-        "swap_used_gb": round(st - sf, 1),
-        "swap_total_gb": round(st, 1),
-    }
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, v = line.split(":", 1)
+                info[k.strip()] = int(v.strip().split()[0])  # kB
+        total = info["MemTotal"] / 1048576
+        avail = info.get("MemAvailable", 0) / 1048576
+        used = total - avail
+        st = info.get("SwapTotal", 0) / 1048576
+        sf = info.get("SwapFree", 0) / 1048576
+        return {
+            "total_gb": round(total, 1),
+            "used_gb": round(used, 1),
+            "avail_gb": round(avail, 1),
+            "pct": round(100 * used / total, 1) if total else 0,
+            "swap_used_gb": round(st - sf, 1),
+            "swap_total_gb": round(st, 1),
+        }
+    except Exception:
+        # 唯一失败路径也兜底，避免炸掉整个 snapshot 丢一轮硬件数据
+        return {"total_gb": None, "used_gb": None, "avail_gb": None, "pct": None,
+                "swap_used_gb": None, "swap_total_gb": None}
 
 # ---------------- GPU ----------------
 
@@ -238,6 +243,87 @@ def gpus():
             "ecc_ce_vol": _i(p[9]), "ecc_ue_vol": _i(p[10]),
             "ecc_ce_agg": _i(p[11]), "ecc_ue_agg": _i(p[12]),
         })
+    return res
+
+_pcie_live = None  # (data, monotonic) 常驻 dmon 线程写入
+
+def _pcie_worker():
+    """常驻 nvidia-smi dmon -d 2 持续采样 PCIe 吞吐。
+    一次性 -c 1 每次要等满 1s 采样间隔（2s 周期实际拖到 3-4s）且每轮 fork，
+    常驻进程则 2s 出一帧，主循环直接读全局值。dmon 无空行分隔，
+    用“同一 index 再次出现 = 新样本”切分。"""
+    global _pcie_live
+    while True:
+        cur = {}
+        p = None
+        try:
+            p = subprocess.Popen(["nvidia-smi", "dmon", "-s", "t", "-d", "2"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 text=True, bufsize=1)
+            for line in p.stdout:
+                parts = line.split()
+                if len(parts) >= 3 and parts[0].isdigit():
+                    idx = int(parts[0])
+                    if idx in cur:  # index 重复 → 上一批完整，提交
+                        _pcie_live = ([{"index": i, "rx": v[0], "tx": v[1]}
+                                      for i, v in sorted(cur.items())], time.monotonic())
+                    cur[idx] = (_f(parts[1]), _f(parts[2]))
+        except Exception:
+            pass
+        finally:
+            if p is not None:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+        time.sleep(2)
+
+def pcie():
+    """GPU PCIe 链路实时吞吐（MB/s），用于卡间通讯（本机无 NVLink，走 PCIe PHB）。
+    优先取常驻 dmon 线程的最新样本（10s 内新鲜）；异常时回退一次性查询。
+    dmon -s t 输出:
+        # gpu  rxpci  txpci
+        # Idx   MB/s   MB/s
+            0      7      0
+    """
+    d = _pcie_live
+    if d is not None and time.monotonic() - d[1] < 10:
+        return d[0]
+    out = _run(["nvidia-smi", "dmon", "-s", "t", "-c", "1"], timeout=4)
+    res = []
+    for line in out.splitlines():
+        p = line.split()
+        if len(p) >= 3 and p[0].isdigit():
+            res.append({"index": int(p[0]), "rx": _f(p[1]), "tx": _f(p[2])})
+    return res
+
+# PCIe 各代单 lane 速率（GT/s）
+_PCIE_GT = {1: 2.5, 2: 5.0, 3: 8.0, 4: 16.0, 5: 32.0}
+_pcie_link_cache = None  # (data, ts) 30s TTL：链路降级（Gen 变化）后能自动更新
+
+def pcie_link():
+    """每卡 PCIe 链路规格 + 理论单向带宽（30s 缓存）。
+    Gen1/2 用 8b/10b 编码 (0.8)，Gen3+ 用 128b/130b (128/130)。"""
+    global _pcie_link_cache
+    c = _pcie_link_cache
+    if c is not None and time.time() - c[1] < 30:
+        return c[0]
+    out = _run(["nvidia-smi", "--query-gpu=index,pcie.link.gen.current,pcie.link.width.current",
+                "--format=csv,noheader,nounits"])
+    res = []
+    for line in out.strip().splitlines():
+        p = [x.strip() for x in line.split(",")]
+        if len(p) < 3:
+            continue
+        try:
+            idx, gen, width = int(p[0]), int(p[1]), int(p[2])
+        except ValueError:
+            continue
+        gt = _PCIE_GT.get(gen)
+        gbps = round(gt * (0.8 if gen <= 2 else 128 / 130) * width, 1) if gt else None
+        res.append({"index": idx, "gen": gen, "width": width, "gbps": gbps})
+    if res:  # 查询失败（驱动启动中/smi 忙）时不缓存，下轮重试
+        _pcie_link_cache = (res, time.time())
     return res
 
 # ---------------- 系统 ECC (EDAC) ----------------
@@ -489,7 +575,7 @@ def _llama_log_speeds():
         return _log_speeds[0]
     data = {"prompt": None, "gen": None, "gen_live": None}
     # -n 500 ≈ 25 分钟日志，保证长请求结束时的汇总行还在窗口内
-    out = _run(["journalctl", "-u", "llama-server", "-n", "500", "--no-pager", "-q"], timeout=5)
+    out = _run(["journalctl", "-u", log_unit(), "-n", "500", "--no-pager", "-q"], timeout=5)
     if out:
         ts_now = time.time()
         year = time.localtime().tm_year
@@ -516,7 +602,7 @@ def _llama_log_speeds():
 
 _log_err = None  # (data, ts)
 
-def log_error_counts(hours=24, cache=30):
+def log_error_counts(hours=24, cache=300):
     """统计最近 N 小时推理服务日志里 错误 / 警告 的行数（带缓存）。
     llama 用 journalctl -p 按优先级过滤；ninfer 的级别写在正文（[error]/[warning]），
     systemd 统一按 warning 记录，需按正文匹配。"""
@@ -593,33 +679,39 @@ _NINFER_TPUT_RE = re.compile(
 def _line_ts(line, year):
     """日志行时间戳（秒）。优先 ninfer 行内嵌的 [YYYY-mm-dd HH:MM:SS.mmm]，
     否则 journal 前缀（英文月份名），都无返回 None。"""
+    ts = None
     m = _NINFER_TS_RE.search(line)
     if m:
         y, mo, dd = (int(x) for x in m.group(1).split("-"))
         hh, mi, ss = (int(x) for x in m.group(2).split(":"))
-        return time.mktime((y, mo, dd, hh, mi, ss, 0, 0, -1))
-    m = re.match(r"(\w{3}) +(\d{1,2}) (\d{2}:\d{2}:\d{2})", line)
-    if m:
-        mm = _MONTHS.get(m.group(1))
-        if mm:
-            hh, mi, ss = (int(x) for x in m.group(3).split(":"))
-            return time.mktime((year, mm, int(m.group(2)), hh, mi, ss, 0, 0, -1))
-    return None
+        ts = time.mktime((y, mo, dd, hh, mi, ss, 0, 0, -1))
+    else:
+        m = re.match(r"(\w{3}) +(\d{1,2}) (\d{2}:\d{2}:\d{2})", line)
+        if m:
+            mm = _MONTHS.get(m.group(1))
+            if mm:
+                hh, mi, ss = (int(x) for x in m.group(3).split(":"))
+                ts = time.mktime((year, mm, int(m.group(2)), hh, mi, ss, 0, 0, -1))
+    # journal 月份名无年份：跨年时旧日志会解析成“未来”，回拨一年避免新鲜度判断失效
+    if ts is not None and ts > time.time() + 3600:
+        ts -= 365 * 86400
+    return ts
 
 _ninfer_stats = None  # (data, ts, unit)
 
 def ninfer_stats(force=False):
     """解析窗口（最近 2000 行 ≈ 1000 请求）内的 ninfer-serve 请求日志，
-    返回窗口累计量、最近完成请求的逐请求数据、在途请求数。0.8 秒缓存。"""
+    返回窗口累计量、最近完成请求的逐请求数据、在途请求数。2 秒缓存（与硬件周期对齐，
+    避免 journalctl 每 0.8s 跑一次）。"""
     global _ninfer_stats
     unit = log_unit()
     now = time.monotonic()
-    if not force and _ninfer_stats is not None and now - _ninfer_stats[1] < 0.8 \
+    if not force and _ninfer_stats is not None and now - _ninfer_stats[1] < 2.0 \
             and _ninfer_stats[2] == unit:
         return _ninfer_stats[0]
     data = {"prompt": 0, "gen": 0, "cache": 0, "requests": 0, "gen_sec": 0.0, "last": None,
             "processing": 0, "tput": None}
-    submitted, finished = {}, set()
+    submitted, finished = set(), set()
     year = time.localtime().tm_year
     out = _run(["journalctl", "-u", unit, "-n", "2000", "--no-pager", "-q"], timeout=6)
     for line in out.splitlines():
@@ -638,9 +730,10 @@ def ninfer_stats(force=False):
             data["gen"] += int(m.group(4))
             data["cache"] += int(m.group(5))
             data["requests"] += 1
-            # 累计 decode 时间（排除 prefill/等待），用于窗口平均生成速度
+            # 累计 decode 时间（排除 prefill/等待），用于窗口平均生成速度；
+            # 速度 < 1 tok/s 视为异常样本（长 prefill 后被打断等），不计入避免拉偏均值
             data["gen_sec"] += (int(m.group(4)) / float(m.group(8))) \
-                if m.group(8) else 0.0
+                if m.group(8) and float(m.group(8)) > 1.0 else 0.0
             data["last"] = {
                 "finish": m.group(2), "prompt": int(m.group(3)), "gen": int(m.group(4)),
                 "cache": int(m.group(5)), "ttft_ms": int(m.group(6)),
@@ -656,7 +749,7 @@ def ninfer_stats(force=False):
             continue
         m = _NINFER_START_RE.search(line)
         if m:
-            submitted[m.group(1)] = _line_ts(line, year)
+            submitted.add(m.group(1))
             continue
         m = _NINFER_ERR_RE.search(line)
         if m:
@@ -665,12 +758,15 @@ def ninfer_stats(force=False):
         m = _NINFER_REJECT_RE.search(line)
         if m:
             finished.add(m.group(1))
-    # 在途请求：优先用吞吐行里服务端自报的 running+prefilling（10 秒内权威值，
+    # 在途请求：服务未运行时日志全是历史（窗口法会把滚出窗口的旧请求永久算在途），直接归零；
+    # 运行中优先用吞吐行里服务端自报的 running（总活跃数 = prefilling + decode_ready，10 秒内权威值，
     # 避免长请求 done 行滚出窗口时窗口法把已完成请求误算为处理中）；
     # 无近期吞吐行（请求全部结束或无日志）时回退窗口推算
     tput = data["tput"]
-    if tput and tput["ts"] is not None and 0 <= time.time() - tput["ts"] <= 10:
-        data["processing"] = tput["running"] + tput["prefilling"]
+    if detect_service()[0] is None:
+        data["processing"], data["tput"] = 0, None
+    elif tput and tput["ts"] is not None and 0 <= time.time() - tput["ts"] <= 10:
+        data["processing"] = tput["running"]
     else:
         data["processing"] = sum(1 for r in submitted if r not in finished)
     _ninfer_stats = (data, now, unit)
@@ -795,6 +891,7 @@ def loadavg():
 _history = {k: [] for k in (
     "gen_tps", "mtp", "cpu", "ram",
     "gpu_util0", "gpu_util1", "gpu_temp0", "gpu_temp1", "vram0", "vram1",
+    "pcie_rx0", "pcie_rx1", "pcie_tx0", "pcie_tx1",
     "disk_r", "disk_w",
 )}
 
@@ -805,9 +902,15 @@ def _push(d):
         if len(h) > HISTORY_LEN:
             del h[:len(h) - HISTORY_LEN]
 
+def _ensure_hist(*keys):
+    """GPU 数动态化：超过预置的 2 卡时按需建历史 key。"""
+    for k in keys:
+        if k not in _history:
+            _history[k] = []
+
 def snapshot(m=None):
     backend = detect_service()[0]
-    props = dict(llama_props())  # 拷贝，避免把派生的 n_ctx 写回共享缓存
+    props = dict(llama_props() or {})  # 拷贝，避免把派生的 n_ctx 写回共享缓存
     if m is None:
         m = llama_metrics()
     proc = llama_proc()
@@ -817,6 +920,7 @@ def snapshot(m=None):
         if cm:
             props["n_ctx"] = int(cm.group(1))
     g = gpus()
+    pc = pcie()
     c = cpu_usage()
     memd = mem()
     d = disks()
@@ -834,10 +938,16 @@ def snapshot(m=None):
         "disk_r": d["read_mbps"],
         "disk_w": d["write_mbps"],
     }
-    for i in range(2):
-        h["gpu_util%d" % i] = g[i]["util"] if i < len(g) else None
-        h["gpu_temp%d" % i] = g[i]["temp"] if i < len(g) else None
-        h["vram%d" % i] = g[i]["vram_used"] if i < len(g) else None
+    # 动态支持 >2 卡
+    _ensure_hist(*[s + str(i) for i in range(len(g))
+                  for s in ("gpu_util", "gpu_temp", "vram", "pcie_rx", "pcie_tx")])
+    pcmap = {x["index"]: x for x in pc}
+    for i in range(len(g)):
+        h["gpu_util%d" % i] = g[i]["util"]
+        h["gpu_temp%d" % i] = g[i]["temp"]
+        h["vram%d" % i] = g[i]["vram_used"]
+        h["pcie_rx%d" % i] = (pcmap.get(i) or {}).get("rx")
+        h["pcie_tx%d" % i] = (pcmap.get(i) or {}).get("tx")
     _push(h)
 
     return {
@@ -855,6 +965,8 @@ def snapshot(m=None):
         },
         "mem": memd,
         "gpus": g,
+        "pcie": pc,
+        "pcie_link": pcie_link(),
         "disks": d,
         "disk_temps": dict(_disk_temp),
         "edac": e,
@@ -877,6 +989,9 @@ def sampler():
                 print("snapshot error:", ex, flush=True)
             _last_hw = t0
         elif _latest is not None:
+            # 约定：快路径只替换已有 key 的值，不增删 key。
+            # GIL 下 dict 单 key 赋值是原子的，HTTP 线程并发 json.dumps 安全；
+            # 若要给 _latest 加新 key，必须改为整体替换快照。
             _latest["llama"]["metrics"] = m
             _latest["llama"]["up"] = m is not None
             _latest["t"] = t0
@@ -1704,6 +1819,7 @@ def main():
     ThreadingHTTPServer.daemon_threads = True
     threading.Thread(target=_disk_temp_worker, daemon=True).start()
     threading.Thread(target=_cpu_temp_worker, daemon=True).start()
+    threading.Thread(target=_pcie_worker, daemon=True).start()
     threading.Thread(target=sampler, daemon=True).start()
     # 预热一次差值，让第一帧就有速率
     cpu_usage(); llama_proc(); llama_metrics()

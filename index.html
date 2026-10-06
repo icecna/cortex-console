@@ -120,7 +120,9 @@
       <h2>GPU</h2>
       <div id="gpu_blocks"></div>
       <canvas class="chart" id="gpu_chart"></canvas>
-      <div class="legend"><span class="sw" style="background:#58a6ff"></span>GPU0 利用率&nbsp;&nbsp;<span class="sw" style="background:#3fb950"></span>GPU1 利用率</div>
+      <div class="legend" id="gpu_legend"></div>
+      <canvas class="chart" id="pcie_chart"></canvas>
+      <div class="legend" id="pcie_legend"></div>
     </section>
   </div>
 
@@ -287,8 +289,8 @@ function render(d) {
 
   chart($("k_gen_c"), [{ color: "#58a6ff", data: d.history.gen_tps }], 100, 30);
   chart($("k_mtp_c"), [{ color: "#bc8cff", data: d.history.mtp }], 100, 30);
-  chart($("k_gpu_c"), [{ color: "#3fb950", data: d.history.gpu_util0 }], 100, 30);
-  chart($("k_vram_c"), [{ color: "#b18cff", data: d.history.vram0 }], 0, 30);
+  chart($("k_gpu_c"), [{ color: "#3fb950", data: d.history.gpu_util0 || [] }], 100, 30);
+  chart($("k_vram_c"), [{ color: "#b18cff", data: d.history.vram0 || [] }], 0, 30);
   chart($("k_cpu_c"), [{ color: "#d29922", data: d.history.cpu }], 100, 30);
   chart($("k_mem_c"), [{ color: "#f85149", data: d.history.ram }], 100, 30);
 
@@ -335,10 +337,17 @@ function render(d) {
   $("log_warn").className = LE && LE.warn > 0 ? "big warn" : "big ok";
 
   /* --- GPU --- */
+  const P = d.pcie || [];
+  const LK = d.pcie_link || [];
   let ghtml = "";
   g.forEach(x => {
     const eccBad = ((x.ecc_ue_vol || 0) > 0 || (x.ecc_ue_agg || 0) > 0);
     const eccWarn = ((x.ecc_ce_vol || 0) > 0 || (x.ecc_ce_agg || 0) > 0);
+    const pc = P.find(q => q.index === x.index) || {};
+    const lk = LK.find(q => q.index === x.index);
+    const capMbs = lk && lk.gbps ? lk.gbps / 8 * 1000 : null;  // 理论单向 MB/s（SI 口径，与 Gb/s 标称一致）
+    const rxPct = capMbs && pc.rx != null ? Math.min(100, pc.rx / capMbs * 100) : null;
+    const txPct = capMbs && pc.tx != null ? Math.min(100, pc.tx / capMbs * 100) : null;
     ghtml += '<div class="gpu">' +
       '<div class="gpu-head">GPU ' + x.index + ' <span class="sub">' + x.name + '</span></div>' +
       '<div class="defs">' +
@@ -348,6 +357,8 @@ function render(d) {
       '<div class="def"><span class="k">功耗</span><span class="v">' + fmt(x.power, 1) + ' W</span></div>' +
       '<div class="def"><span class="k">频率</span><span class="v">' + fmt(x.clock) + ' MHz</span></div>' +
       '<div class="def"><span class="k">ECC (CE/UE)</span><span class="v ' + (eccBad ? "bad" : eccWarn ? "warn" : "ok") + '">' + fmt(x.ecc_ce_agg) + ' / ' + fmt(x.ecc_ue_agg) + '</span></div>' +
+      '<div class="def"><span class="k">PCIe 链路</span><span class="v">' + (lk ? "Gen" + lk.gen + " x" + lk.width + (lk.gbps ? " (" + lk.gbps + " Gb/s)" : "") : "—") + '</span></div>' +
+      '<div class="def"><span class="k">PCIe (Rx/Tx)</span><span class="v">' + fmt(pc.rx == null ? "—" : pc.rx) + ' / ' + fmt(pc.tx == null ? "—" : pc.tx) + ' MB/s' + (capMbs ? ' <span class="sub">(' + fmt(rxPct) + '% / ' + fmt(txPct) + '%)</span>' : "") + '</span></div>' +
       '</div>' +
       '<div class="bar"><i style="width:' + (x.util || 0) + '%"></i></div>' +
       '</div>';
@@ -357,10 +368,22 @@ function render(d) {
     $("gpu_blocks").innerHTML = ghtml;
     $("gpu_blocks").__html = ghtml;
   }
-  chart($("gpu_chart"), [
-    { color: "#58a6ff", data: d.history.gpu_util0 },
-    { color: "#3fb950", data: d.history.gpu_util1 },
-  ], 100);
+  // GPU 图表按实际卡数动态构建（>2 卡也支持）
+  const GPU_COLORS = ["#58a6ff", "#3fb950", "#f778ba", "#e3b341", "#39c5cf", "#a371f7"];
+  const PCIE_PAIRS = [["#f778ba", "#39c5cf"], ["#e3b341", "#a371f7"], ["#58a6ff", "#3fb950"]];
+  $("gpu_legend").innerHTML = g.map((x, i) =>
+    '<span class="sw" style="background:' + GPU_COLORS[i % GPU_COLORS.length] + '"></span>GPU' + i + ' 利用率&nbsp;&nbsp;').join("");
+  $("pcie_legend").innerHTML = g.map((x, i) => {
+    const c = PCIE_PAIRS[i % PCIE_PAIRS.length];
+    return '<span class="sw" style="background:' + c[0] + '"></span>GPU' + i + ' Rx&nbsp;&nbsp;'
+         + '<span class="sw" style="background:' + c[1] + '"></span>GPU' + i + ' Tx&nbsp;&nbsp;';
+  }).join("");
+  chart($("gpu_chart"), g.map((x, i) => ({ color: GPU_COLORS[i % GPU_COLORS.length], data: d.history["gpu_util" + i] || [] })), 100);
+  chart($("pcie_chart"), g.flatMap((x, i) => {
+    const c = PCIE_PAIRS[i % PCIE_PAIRS.length];
+    return [{ color: c[0], data: d.history["pcie_rx" + i] || [] },
+            { color: c[1], data: d.history["pcie_tx" + i] || [] }];
+  }), 0);
 
   /* --- CPU / 内存 --- */
   $("cpu_usage").textContent = fmt(d.cpu.usage, 1) + "%";
