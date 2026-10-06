@@ -314,3 +314,39 @@ body.admin-page .cols2 > .col:last-child > .section:first-child > .logview {
   .kpis { flex-wrap: wrap; }
   .kpi { flex: 1 1 30%; border-bottom: 1px solid var(--border); }
 }
+/* ---------- 手机（≤600px） ---------- */
+@media (max-width: 600px) {
+  body { padding: 8px 10px 14px; font-size: 13px; }
+  header { gap: 6px; }
+  header > span { flex-basis: 100%; justify-content: flex-end; }
+  h1 { font-size: 16px; }
+  .sub { font-size: 11px; }
+  a.link { font-size: 12px; }
+  #clock, a.link[href="/themes"] { display: none; }
+  /* KPI 每行 2 个，数字缩小避免溢出 */
+  .kpi { flex: 1 1 50%; padding: 8px 10px 7px; border-right: none; }
+  .kpi:nth-child(odd) { border-right: 1px solid var(--border); }
+  .kpi:nth-last-child(-n+2) { border-bottom: none; }
+  .kpi-label { font-size: 11px; }
+  .kpi-value { font-size: 24px; letter-spacing: 0; }
+  .kpi-value .u { font-size: 11px; }
+  .kpi-sub { font-size: 11px; }
+  .kpi-spark { height: 22px; }
+  .section { padding: 10px 0 12px; }
+  .section > h2 { font-size: 13px; }
+  .defs { gap: 4px 10px; }
+  .def { font-size: 13px; gap: 8px; }
+  .def .k { font-size: 11px; }
+  .big { font-size: 18px; }
+  table { font-size: 12px; }
+  th, td { padding: 5px 6px; }
+  .tblwrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 8px 0 0; }
+  canvas.chart { height: 40px; }
+  .legend { font-size: 11px; }
+  .cmd { font-size: 11px; padding: 6px 8px; }
+  .gpu-head { font-size: 13px; }
+  .logview { height: 280px; }
+  body.admin-page .cols2 > .col:last-child > .section:first-child > .logview {
+    height: 280px; flex: none; min-height: 280px;
+  }
+}
