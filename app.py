@@ -5,7 +5,7 @@
 自动探测后端（llama-server / ninfer-serve），数据源：
   - llama-server: /metrics (吞吐、MTP 逐位置接受率) + /props (模型参数)
   - ninfer-serve: journalctl 请求日志 (速度、整体接受率) + /v1/models
-  - nvidia-smi             (GPU 温度/利用率/显存/功耗/ECC)
+  - nvidia-smi             (GPU 温度/利用率/显存/功耗/ECC；PCIe 吞吐由常驻 dmon 线程 2s 采样)
   - /proc                  (CPU/内存/磁盘 IO/进程)
   - EDAC                   (系统内存 ECC)
 浏览器访问 http://<ip>:80 或 :8090
@@ -702,7 +702,7 @@ _ninfer_stats = None  # (data, ts, unit)
 def ninfer_stats(force=False):
     """解析窗口（最近 2000 行 ≈ 1000 请求）内的 ninfer-serve 请求日志，
     返回窗口累计量、最近完成请求的逐请求数据、在途请求数。2 秒缓存（与硬件周期对齐，
-    避免 journalctl 每 0.8s 跑一次）。"""
+    避免 journalctl 每 0.5s 跑一次）。"""
     global _ninfer_stats
     unit = log_unit()
     now = time.monotonic()
@@ -1682,10 +1682,21 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                 self.wfile.write(("data: " + line.rstrip("\n") + "\n\n").encode())
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, OSError):
+        except Exception:
             pass
         finally:
-            p.terminate()
+            try:
+                p.terminate()
+                p.wait(timeout=2)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+                try:
+                    p.wait(timeout=1)
+                except Exception:
+                    pass
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
