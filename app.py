@@ -4,7 +4,8 @@
 
 自动探测后端（llama-server / ninfer-serve），数据源：
   - llama-server: /metrics (吞吐、MTP 逐位置接受率) + /props (模型参数)
-  - ninfer-serve: journalctl 请求日志 (速度、整体接受率) + /v1/models
+  - ninfer-serve: /metrics (累计 tokens、MTP 接受率、实时速度 counter 差值)
+                   + journalctl 请求日志 (在途/排队、逐请求详情) + /v1/models
   - nvidia-smi             (GPU 温度/利用率/显存/功耗/ECC；PCIe 吞吐由常驻 dmon 线程 2s 采样)
   - /proc                  (CPU/内存/磁盘 IO/进程)
   - EDAC                   (系统内存 ECC)
@@ -699,18 +700,82 @@ def _line_ts(line, year):
 
 _ninfer_stats = None  # (data, ts, unit)
 
+_ninfer_mprev = None  # (monotonic, counters) 上一窗口，用于差值算实时速度
+_ninfer_boot = None    # (monotonic, counters) 基准点，用于平均速度
+_ninfer_acc = None     # [基准 decode counter, decode 秒数] 平均速度只累计实际在 decode 的时间
+_ninfer_cnt_cache = None  # (data, monotonic) 0.4s 缓存：sampler 快路径里 metrics 与 log_speeds
+                          # 都会调用，共享同一份差值（否则第二次 dt<0.15 被防抖丢成 None）
+
+def _ninfer_counters():
+    """ninfer-serve /metrics（Prometheus 格式，无前缀 counter）。
+    返回服务启动以来累计量（tokens/MTP）、与上一窗口的差值实时速度（0.5s 窗口，
+    比 5s 吞吐行更平滑）、dashboard 启动以来 decode 均值（只计实际 decode 时间，
+    服务重启 counter 归零时自动重置基准）。服务未响应返回 None。"""
+    global _ninfer_mprev, _ninfer_boot, _ninfer_cnt_cache, _ninfer_acc
+    c = _ninfer_cnt_cache
+    if c is not None and time.monotonic() - c[1] < 0.4:
+        return c[0]
+    text = _get(llama_base() + "/metrics")
+    if text is None:
+        _ninfer_mprev = None
+        return None
+    s, _ = parse_prom(text)
+    now = time.monotonic()
+    prev = _ninfer_mprev
+    _ninfer_mprev = (now, s)
+    b = _ninfer_boot
+    if b is None or b[1].get("decode_tokens_total", 0) > s.get("decode_tokens_total", 0):
+        b = _ninfer_boot = (now, s)  # 首次基准 / 服务重启 counter 倒退
+        _ninfer_acc = [s.get("decode_tokens_total", 0), 0.0]
+    acc = _ninfer_acc
+    gen_tps = prompt_tps = accept_inst = None
+    if prev is not None:
+        dt = now - prev[0]
+        if dt >= 0.15:  # dt 异常偏小（时钟跳变等）时跳过本窗口速率，避免假尖峰
+            gen_tps = max(0.0, s.get("decode_tokens_total", 0)
+                          - prev[1].get("decode_tokens_total", 0)) / dt
+            prompt_tps = max(0.0, s.get("prefill_tokens_total", 0)
+                             - prev[1].get("prefill_tokens_total", 0)) / dt
+            if gen_tps > 0:
+                acc[1] += dt  # 只计实际 decode 时间，空闲不算（与 llama 的 decode-only 均值口径一致）
+            dd = (s.get("spec_decode_draft_tokens_total", 0)
+                  - prev[1].get("spec_decode_draft_tokens_total", 0))
+            da = (s.get("spec_decode_accepted_tokens_total", 0)
+                  - prev[1].get("spec_decode_accepted_tokens_total", 0))
+            if dd > 0:
+                accept_inst = 100.0 * da / dd
+    avg = pred_sec = None
+    delta = s.get("decode_tokens_total", 0) - acc[0]
+    if acc[1] >= 30 and delta > 0:  # decode 样本太小时均值无意义
+        avg = delta / acc[1]
+        pred_sec = delta / avg
+    d = s.get("spec_decode_draft_tokens_total", 0)
+    a = s.get("spec_decode_accepted_tokens_total", 0)
+    res = {
+        "prompt": s.get("prefill_tokens_total", 0),
+        "predicted": s.get("decode_tokens_total", 0),
+        "cached": s.get("prompt_tokens_cached_total", 0),
+        "rounds": s.get("spec_decode_rounds_total", 0),
+        "gen_tps": gen_tps, "prompt_tps": prompt_tps, "gen_tps_avg": avg,
+        "predicted_seconds": pred_sec,
+        "accept": (100.0 * a / d) if d else None,
+        "accept_inst": accept_inst,
+        "draft_tokens": d, "accepted": a,
+    }
+    _ninfer_cnt_cache = (res, time.monotonic())
+    return res
+
 def ninfer_stats(force=False):
-    """解析窗口（最近 2000 行 ≈ 1000 请求）内的 ninfer-serve 请求日志，
-    返回窗口累计量、最近完成请求的逐请求数据、在途请求数。2 秒缓存（与硬件周期对齐，
-    避免 journalctl 每 0.5s 跑一次）。"""
+    """解析 ninfer-serve 请求日志（最近 2000 行）：吞吐行（在途/排队）与
+    done 行（逐请求详情）。5s 缓存（吞吐行 5s 一行，更高频率无意义）。
+    累计 tokens / MTP / 速度已改走 /metrics（_ninfer_counters）。"""
     global _ninfer_stats
     unit = log_unit()
     now = time.monotonic()
-    if not force and _ninfer_stats is not None and now - _ninfer_stats[1] < 2.0 \
+    if not force and _ninfer_stats is not None and now - _ninfer_stats[1] < 5.0 \
             and _ninfer_stats[2] == unit:
         return _ninfer_stats[0]
-    data = {"prompt": 0, "gen": 0, "cache": 0, "requests": 0, "gen_sec": 0.0, "last": None,
-            "processing": 0, "tput": None}
+    data = {"last": None, "processing": 0, "tput": None}
     submitted, finished = set(), set()
     year = time.localtime().tm_year
     out = _run(["journalctl", "-u", unit, "-n", "2000", "--no-pager", "-q"], timeout=6)
@@ -726,14 +791,6 @@ def ninfer_stats(force=False):
             continue
         m = _NINFER_DONE_RE.search(line)
         if m:
-            data["prompt"] += int(m.group(3))
-            data["gen"] += int(m.group(4))
-            data["cache"] += int(m.group(5))
-            data["requests"] += 1
-            # 累计 decode 时间（排除 prefill/等待），用于窗口平均生成速度；
-            # 速度 < 1 tok/s 视为异常样本（长 prefill 后被打断等），不计入避免拉偏均值
-            data["gen_sec"] += (int(m.group(4)) / float(m.group(8))) \
-                if m.group(8) and float(m.group(8)) > 1.0 else 0.0
             data["last"] = {
                 "finish": m.group(2), "prompt": int(m.group(3)), "gen": int(m.group(4)),
                 "cache": int(m.group(5)), "ttft_ms": int(m.group(6)),
@@ -759,13 +816,13 @@ def ninfer_stats(force=False):
         if m:
             finished.add(m.group(1))
     # 在途请求：服务未运行时日志全是历史（窗口法会把滚出窗口的旧请求永久算在途），直接归零；
-    # 运行中优先用吞吐行里服务端自报的 running（总活跃数 = prefilling + decode_ready，10 秒内权威值，
+    # 运行中优先用吞吐行里服务端自报的 running（总活跃数 = prefilling + decode_ready，15 秒内权威值，
     # 避免长请求 done 行滚出窗口时窗口法把已完成请求误算为处理中）；
-    # 无近期吞吐行（请求全部结束或无日志）时回退窗口推算
+    # 无近期吞吐行（请求全部结束或无日志）时回退窗口推算（吞吐行 5s 一行 + 本函数 5s 缓存，窗口放宽到 15s）
     tput = data["tput"]
     if detect_service()[0] is None:
         data["processing"], data["tput"] = 0, None
-    elif tput and tput["ts"] is not None and 0 <= time.time() - tput["ts"] <= 10:
+    elif tput and tput["ts"] is not None and 0 <= time.time() - tput["ts"] <= 15:
         data["processing"] = tput["running"]
     else:
         data["processing"] = sum(1 for r in submitted if r not in finished)
@@ -773,27 +830,26 @@ def ninfer_stats(force=False):
     return data
 
 def ninfer_log_speeds():
-    """与 llama_log_speeds 同形：gen = 最近完成请求（decode 速度 + prefill 速度）；
-    gen_live = 最近 10 秒吞吐行的实时 decode 速度（5s 一行，生成中持续更新）；
-    prefill_live = 最近 10 秒吞吐行里 prefill > 0（等待首 token 时的实时 prefill 速度，5s 更新）。"""
+    """与 llama_log_speeds 同形：gen_live = /metrics counter 差值实时速度（0.5s 窗口，比 5s 吞吐行更平滑）；
+    prefill_live = 实时 prefill 速度；gen = 最近完成请求（done 行）。"""
+    c = _ninfer_counters()
     d = ninfer_stats()
-    last = d["last"]
     out = {"prompt": None, "gen": None, "gen_live": None, "prefill_live": None}
     tput = d.get("tput")
-    if (tput and tput["ts"] is not None
-            and 0 <= time.time() - tput["ts"] <= 10):
-        if tput["decode_tps"] > 0:
-            out["gen_live"] = {"n_gen": None, "tg": tput["decode_tps"],
-                                "tg_3s": tput["decode_tps"]}
-        if tput["prefill_tps"] > 0:
-            out["prefill_live"] = {"tps": tput["prefill_tps"], "ts": tput["ts"],
-                                    "prefilling": tput["prefilling"],
-                                    "waiting": tput["waiting"]}
+    fresh_tput = tput and tput["ts"] is not None and 0 <= time.time() - tput["ts"] <= 15
+    if c:
+        if c["gen_tps"]:
+            out["gen_live"] = {"n_gen": None, "tg": c["gen_tps"], "tg_3s": c["gen_tps"]}
+        if c["prompt_tps"]:
+            out["prefill_live"] = {"tps": c["prompt_tps"], "ts": time.time(),
+                                    "prefilling": (tput["prefilling"] if fresh_tput else None),
+                                    "waiting": (tput["waiting"] if fresh_tput else None)}
+    last = d["last"]
     if last and last["ts"] is not None:
         out["gen"] = {"ms": last["wall_s"] * 1000.0, "tokens": last["gen"],
                       "tps": last["decode_tps"], "prefill_tps": last["prefill_tps"],
                       "ts": last["ts"]}
-        # decode=n/a（如 gen<=1）时无生成速度，不出实时点；吞吐行已给出
+        # decode=n/a（如 gen<=1）时无生成速度，不出实时点；counter 已给出
         # 实时速度时不覆盖（连续请求间隔 <10s 时 done 行是上一请求的旧值）
         if last["decode_tps"] is not None and out["gen_live"] is None \
                 and 0 <= time.time() - last["ts"] <= 10:
@@ -802,27 +858,36 @@ def ninfer_log_speeds():
     return out
 
 def ninfer_metrics():
-    """按 llama metrics 同形组装：窗口累计 tokens + 最近请求速度/接受率。
-    无逐位置接受率、无验证步/草稿 token 累计（日志只有逐请求汇总），相应字段为 None。"""
+    """按 llama metrics 同形组装：累计 tokens / MTP 接受率 / 实时速度来自 /metrics counter
+    （服务启动以来累计）；在途/排队来自日志吞吐行；逐请求细节来自 done 行。
+    /metrics 未响应返回 None。"""
+    c = _ninfer_counters()
+    if c is None:
+        return None
     d = ninfer_stats()
     last = d["last"] or {}
+    tput = d["tput"]
     return {
-        "gen_tps": None, "gen_hold": None, "prompt_tps": None, "gen_tps_avg": None,
+        "gen_tps": round(c["gen_tps"], 1) if c["gen_tps"] else None,
+        "gen_hold": None,
+        "prompt_tps": round(c["prompt_tps"], 1) if c["prompt_tps"] else None,
+        "gen_tps_avg": round(c["gen_tps_avg"], 1) if c["gen_tps_avg"] else None,
         "mtp": {
-            "accept": last.get("accept_pct"),
-            "accept_inst": None,
+            "accept": round(c["accept"], 1) if c["accept"] is not None else None,
+            "accept_inst": round(c["accept_inst"], 1) if c["accept_inst"] is not None else None,
             "pos": {},
-            "drafts": None, "draft_tokens": None, "accepted": None,
+            "drafts": c["rounds"],
+            "draft_tokens": c["draft_tokens"],
+            "accepted": c["accepted"],
             "tok_per_round": last.get("tok_per_round"),
         },
-        "tokens": {"prompt": d["prompt"], "cached": d["cache"], "predicted": d["gen"],
-                    # 窗口内（≈1000 请求）平均 decode 速度：总 gen tokens / 总 decode 时间
-                    "predicted_seconds": (d["gen_sec"] if d["gen_sec"] > 0 else None),
+        "tokens": {"prompt": c["prompt"], "cached": c["cached"], "predicted": c["predicted"],
+                    "predicted_seconds": c["predicted_seconds"],
                     "max_seq": None},
         "requests": {"processing": d["processing"],
-                      "deferred": (d["tput"]["waiting"]
-                                   if d["tput"] and d["tput"]["ts"] is not None
-                                   and 0 <= time.time() - d["tput"]["ts"] <= 10 else None)},
+                      "deferred": (tput["waiting"]
+                                   if tput and tput["ts"] is not None
+                                   and 0 <= time.time() - tput["ts"] <= 15 else None)},
     }
 
 _ninfer_props_cache, _ninfer_props_ts = None, 0.0

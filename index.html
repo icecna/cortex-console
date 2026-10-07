@@ -258,8 +258,8 @@ function render(d) {
     && (gpuBusy || (!gpuAllZero && (d.t - LG.gen.ts) <= genWin));
   if (live && !gpuAllZero) {
     $("k_gen").innerHTML = '<span class="num">' + fmt(live.tg, 1) + '</span><span class="u">t/s</span>';
-    // ninfer: n_gen 为 null 说明来自 5s 吞吐行（实时值）；有值则来自 done 行兜底（整请求值）
-    $("k_gen_sub").textContent = (BE === "ninfer" && live.n_gen != null ? "刚结束 " : (BE === "ninfer" ? "实时5s " : "3s ")) + fmt(live.tg_3s, 1) + " t/s" + (cumStr ? " · " + cumStr : "");
+    // n_gen 为 null 说明来自 /metrics counter 差值（实时）；有值则来自 done 行兜底（整请求值）
+    $("k_gen_sub").textContent = (BE === "ninfer" && live.n_gen != null ? "刚结束 " : (BE === "ninfer" ? "实时 " : "3s ")) + fmt(live.tg_3s, 1) + " t/s" + (cumStr ? " · " + cumStr : "");
   } else if (pf && pf.ts != null && (d.t - pf.ts) <= 10 && !gpuAllZero) {
     $("k_gen").innerHTML = '<span class="num">' + fmt(pf.tps, 1) + '</span><span class="u">t/s</span>';
     $("k_gen_sub").textContent = "prefill 中" + (pf.waiting ? " · 排队 " + pf.waiting : "") + (cumStr ? " · " + cumStr : "");
@@ -324,12 +324,14 @@ function render(d) {
     $("mtp_acc").textContent = fmt(t.accepted);
     $("gen_tok_prompt").textContent = fmt(M.tokens.prompt);
     const cached = M.tokens.cached, prompt = M.tokens.prompt;
+    // ninfer 的 prompt_tokens_total 不含命中前缀，分母用 cached+prompt 才 ≤100%
+    const cDen = prompt + (BE === "ninfer" ? (cached || 0) : 0);
     $("gen_tok_cached").textContent = (cached != null ? fmt(cached) : "—") +
-      (prompt > 0 ? "（" + fmt(100 * cached / prompt, 1) + "%）" : "");
+      (cDen > 0 ? "（" + fmt(100 * cached / cDen, 1) + "%）" : "");
     $("gen_tok_pred").textContent = fmt(M.tokens.predicted);
     $("gen_tok_max").textContent = fmt(M.tokens.max_seq);
   }
-  $("stat_scope").textContent = BE === "ninfer" ? "窗口累计 · 近 ~1000 请求" : "";
+  $("stat_scope").textContent = BE === "ninfer" ? "服务启动以来累计" : "";
 
   /* --- 近期日志 (journalctl，最近 24 小时) --- */
   const LE = L.log_err;
