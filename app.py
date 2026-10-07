@@ -794,7 +794,7 @@ def ninfer_stats(force=False):
             and _ninfer_stats[2] == unit:
         return _ninfer_stats[0]
     data = {"last": None, "processing": 0, "tput": None}
-    submitted, finished = set(), set()
+    submitted, finished = {}, set()
     year = time.localtime().tm_year
     out = _run(["journalctl", "-u", unit, "-n", "2000", "--no-pager", "-q"], timeout=6)
     for line in out.splitlines():
@@ -824,7 +824,7 @@ def ninfer_stats(force=False):
             continue
         m = _NINFER_START_RE.search(line)
         if m:
-            submitted.add(m.group(1))
+            submitted[m.group(1)] = _line_ts(line, year)
             continue
         m = _NINFER_ERR_RE.search(line)
         if m:
@@ -834,16 +834,19 @@ def ninfer_stats(force=False):
         if m:
             finished.add(m.group(1))
     # 在途请求：服务未运行时日志全是历史（窗口法会把滚出窗口的旧请求永久算在途），直接归零；
-    # 运行中优先用吞吐行里服务端自报的 running（总活跃数 = prefilling + decode_ready，15 秒内权威值，
-    # 避免长请求 done 行滚出窗口时窗口法把已完成请求误算为处理中）；
-    # 无近期吞吐行（请求全部结束或无日志）时回退窗口推算（吞吐行 5s 一行 + 本函数 5s 缓存，窗口放宽到 15s）
+    # 运行中优先用吞吐行里服务端自报的 running（总活跃数 = prefilling + decode_ready，15 秒内权威值）；
+    # 无近期吞吐行时回退窗口推算，但只认 60s 内提交的：有请求在途时服务端每 5s 出吞吐行，
+    # 回退只应发生在服务刚启动的头几秒；更早提交且无 done 行的视为已取消/中断，不再误算在途
     tput = data["tput"]
+    now_wall = time.time()
     if detect_service()[0] is None:
         data["processing"], data["tput"] = 0, None
-    elif tput and tput["ts"] is not None and 0 <= time.time() - tput["ts"] <= 15:
+    elif tput and tput["ts"] is not None and 0 <= now_wall - tput["ts"] <= 15:
         data["processing"] = tput["running"]
     else:
-        data["processing"] = sum(1 for r in submitted if r not in finished)
+        data["processing"] = sum(
+            1 for r, ts in submitted.items()
+            if r not in finished and ts is not None and 0 <= now_wall - ts <= 60)
     _ninfer_stats = (data, now, unit)
     return data
 
@@ -907,9 +910,10 @@ def ninfer_metrics():
                     "predicted_seconds": c["predicted_seconds"],
                     "max_seq": None},
         "requests": {"processing": d["processing"],
+                      # 无近期吞吐行（全部请求已结束或无日志）视为无排队，避免页面显示 “—”
                       "deferred": (tput["waiting"]
                                    if tput and tput["ts"] is not None
-                                   and 0 <= time.time() - tput["ts"] <= 15 else None)},
+                                   and 0 <= time.time() - tput["ts"] <= 15 else 0)},
     }
 
 _ninfer_props_cache, _ninfer_props_ts = None, 0.0
@@ -1893,6 +1897,7 @@ class Handler(BaseHTTPRequestHandler):
         ctype = "text/css" if path.endswith(".css") else "text/html; charset=utf-8"
         self.send_response(200)
         self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")  # 页面迭代快，避免浏览器缓存旧版 JS
         self.end_headers()
         self.wfile.write(body)
 
