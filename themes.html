@@ -76,14 +76,14 @@ for (const t of THEMES) {
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">' +
         '<div class="dot"></div><b>Qwen3.8-27B</b><span class="sub">IQ3_S · ctx 160000</span></div>' +
       '<div class="kpis">' +
+        '<div class="kpi"><div class="kpi-label">填充速度</div>' +
+          '<div class="kpi-value"><span class="num">158.5</span><span class="u">t/s</span></div>' +
+          '<div class="kpi-sub">实时</div>' +
+          spark() +
+        '</div>' +
         '<div class="kpi"><div class="kpi-label">生成速度</div>' +
           '<div class="kpi-value"><span class="num">64.8</span><span class="u">t/s</span></div>' +
           '<div class="kpi-sub">累计平均 55.9 t/s</div>' +
-          spark() +
-        '</div>' +
-        '<div class="kpi"><div class="kpi-label">MTP 接受率</div>' +
-          '<div class="kpi-value"><span class="num">87.5</span><span class="u">%</span></div>' +
-          '<div class="kpi-sub">实时 88.2%</div>' +
           spark() +
         '</div>' +
       '</div>' +

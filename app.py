@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import select
 import subprocess
 import threading
 import time
@@ -468,6 +469,8 @@ def llama_proc():
     try:
         with open("/proc/%d/cmdline" % pid, "rb") as f:
             cmdline = f.read().replace(b"\0", b" ").decode().strip()
+        # 脱敏：/api/status 无鉴权，不能把 --api-key 等凭据泄露给任意访问者
+        cmdline = re.sub(r"(--[\w-]*[ak]ey[\w-]*\s+)\S+", r"\1****", cmdline) if cmdline else None
     except Exception:
         pass
     return {
@@ -700,7 +703,9 @@ def _line_ts(line, year):
 
 _ninfer_stats = None  # (data, ts, unit)
 
-_ninfer_mprev = None  # (monotonic, counters) 上一窗口，用于差值算实时速度
+_ninfer_mprev = None  # (monotonic, counters) 上一窗口，用于实际间隔累计
+_ninfer_mtp = []     # [(monotonic, draft_tokens, accepted_tokens)] 近 15s 采样，实时接受率窗口
+_ninfer_mtp_hold = None  # decode 进行中且窗口内无完成事件时，保持上一次接受率
 _ninfer_boot = None    # (monotonic, counters) 基准点，用于平均速度
 _ninfer_acc = None     # [基准 decode counter, decode 秒数] 平均速度只累计实际在 decode 的时间
 _ninfer_cnt_cache = None  # (data, monotonic) 0.4s 缓存：sampler 快路径里 metrics 与 log_speeds
@@ -708,10 +713,10 @@ _ninfer_cnt_cache = None  # (data, monotonic) 0.4s 缓存：sampler 快路径里
 
 def _ninfer_counters():
     """ninfer-serve /metrics（Prometheus 格式，无前缀 counter）。
-    返回服务启动以来累计量（tokens/MTP）、与上一窗口的差值实时速度（0.5s 窗口，
-    比 5s 吞吐行更平滑）、dashboard 启动以来 decode 均值（只计实际 decode 时间，
-    服务重启 counter 归零时自动重置基准）。服务未响应返回 None。"""
-    global _ninfer_mprev, _ninfer_boot, _ninfer_cnt_cache, _ninfer_acc
+    返回服务启动以来累计量（tokens/MTP）、实时速度（直接读 decode/prefill_tokens_per_second
+    gauge，服务端 5s 窗口平滑、空闲回零）、dashboard 启动以来 decode 均值（只计实际
+    decode 时间，服务重启 counter 归零时自动重置基准）。服务未响应返回 None。"""
+    global _ninfer_mprev, _ninfer_boot, _ninfer_cnt_cache, _ninfer_acc, _ninfer_mtp, _ninfer_mtp_hold
     c = _ninfer_cnt_cache
     if c is not None and time.monotonic() - c[1] < 0.4:
         return c[0]
@@ -722,35 +727,48 @@ def _ninfer_counters():
     s, _ = parse_prom(text)
     now = time.monotonic()
     prev = _ninfer_mprev
+    dt = (now - prev[0]) if prev is not None else 0.0
     _ninfer_mprev = (now, s)
     b = _ninfer_boot
     if b is None or b[1].get("decode_tokens_total", 0) > s.get("decode_tokens_total", 0):
         b = _ninfer_boot = (now, s)  # 首次基准 / 服务重启 counter 倒退
         _ninfer_acc = [s.get("decode_tokens_total", 0), 0.0]
     acc = _ninfer_acc
-    gen_tps = prompt_tps = accept_inst = None
-    if prev is not None:
-        dt = now - prev[0]
-        if dt >= 0.15:  # dt 异常偏小（时钟跳变等）时跳过本窗口速率，避免假尖峰
-            gen_tps = max(0.0, s.get("decode_tokens_total", 0)
-                          - prev[1].get("decode_tokens_total", 0)) / dt
-            prompt_tps = max(0.0, s.get("prefill_tokens_total", 0)
-                             - prev[1].get("prefill_tokens_total", 0)) / dt
-            if gen_tps > 0:
-                acc[1] += dt  # 只计实际 decode 时间，空闲不算（与 llama 的 decode-only 均值口径一致）
-            dd = (s.get("spec_decode_draft_tokens_total", 0)
-                  - prev[1].get("spec_decode_draft_tokens_total", 0))
-            da = (s.get("spec_decode_accepted_tokens_total", 0)
-                  - prev[1].get("spec_decode_accepted_tokens_total", 0))
-            if dd > 0:
-                accept_inst = 100.0 * da / dd
+    accept_inst = None
+    # 实时速度直接读服务端 gauge（5s 窗口平滑，空闲回零），不再用 counter 差值
+    gen_tps = s.get("decode_tokens_per_second") or None
+    prompt_tps = s.get("prefill_tokens_per_second") or None
+    if gen_tps and dt > 0:
+        acc[1] += dt  # 只计实际 decode 时间，空闲不算（与 llama 的 decode-only 均值口径一致）
+    d = s.get("spec_decode_draft_tokens_total", 0)
+    a = s.get("spec_decode_accepted_tokens_total", 0)
+    # 实时接受率：ninfer 的 spec_decode_*_total 只在请求结束时更新，逐秒差值恒为 0，
+    # 改用近 15s 窗口差值（跨请求边界）；服务重启 counter 倒退时清窗
+    d_cur = d
+    a_cur = a
+    if _ninfer_mtp and d_cur < _ninfer_mtp[-1][1]:
+        _ninfer_mtp.clear()
+        _ninfer_mtp_hold = None
+    _ninfer_mtp.append((now, d_cur, a_cur))
+    while _ninfer_mtp and now - _ninfer_mtp[0][0] > 15:
+        _ninfer_mtp.pop(0)
+    accept_inst = None
+    if len(_ninfer_mtp) >= 2:
+        dd = _ninfer_mtp[-1][1] - _ninfer_mtp[0][1]
+        da = _ninfer_mtp[-1][2] - _ninfer_mtp[0][2]
+        if dd > 0:
+            accept_inst = 100.0 * da / dd
+    if accept_inst is not None:
+        _ninfer_mtp_hold = accept_inst
+    elif gen_tps:
+        # 长请求中途窗口内无完成事件：沿用上一次值（接受率由模型/配置决定，基本稳定）；
+        # dashboard 刚启动冷启动时用累计值兜底
+        accept_inst = _ninfer_mtp_hold or ((100.0 * a / d) if d else None)
     avg = pred_sec = None
     delta = s.get("decode_tokens_total", 0) - acc[0]
     if acc[1] >= 30 and delta > 0:  # decode 样本太小时均值无意义
         avg = delta / acc[1]
         pred_sec = delta / avg
-    d = s.get("spec_decode_draft_tokens_total", 0)
-    a = s.get("spec_decode_accepted_tokens_total", 0)
     res = {
         "prompt": s.get("prefill_tokens_total", 0),
         "predicted": s.get("decode_tokens_total", 0),
@@ -830,8 +848,8 @@ def ninfer_stats(force=False):
     return data
 
 def ninfer_log_speeds():
-    """与 llama_log_speeds 同形：gen_live = /metrics counter 差值实时速度（0.5s 窗口，比 5s 吞吐行更平滑）；
-    prefill_live = 实时 prefill 速度；gen = 最近完成请求（done 行）。"""
+    """与 llama_log_speeds 同形：gen_live / prefill_live = /metrics 实时速度 gauge
+    （decode/prefill_tokens_per_second，服务端 5s 窗口平滑）；gen = 最近完成请求（done 行）。"""
     c = _ninfer_counters()
     d = ninfer_stats()
     out = {"prompt": None, "gen": None, "gen_live": None, "prefill_live": None}
@@ -840,10 +858,14 @@ def ninfer_log_speeds():
     if c:
         if c["gen_tps"]:
             out["gen_live"] = {"n_gen": None, "tg": c["gen_tps"], "tg_3s": c["gen_tps"]}
-        if c["prompt_tps"]:
+        if c.get("prompt_tps"):
             out["prefill_live"] = {"tps": c["prompt_tps"], "ts": time.time(),
-                                    "prefilling": (tput["prefilling"] if fresh_tput else None),
-                                    "waiting": (tput["waiting"] if fresh_tput else None)}
+                                    "prefilling": tput["prefilling"] if tput else 0,
+                                    "waiting": tput["waiting"] if tput else 0}
+    elif fresh_tput and tput["prefill_tps"] > 0:
+        # /metrics 未响应时退回吞吐行服务端自测值
+        out["prefill_live"] = {"tps": tput["prefill_tps"], "ts": tput["ts"],
+                                "prefilling": tput["prefilling"], "waiting": tput["waiting"]}
     last = d["last"]
     if last and last["ts"] is not None:
         out["gen"] = {"ms": last["wall_s"] * 1000.0, "tokens": last["gen"],
@@ -947,14 +969,15 @@ def ninfer_props():
 
 def loadavg():
     try:
-        return [round(float(x), 2) for x in open("/proc/loadavg").read().split()[:3]]
+        with open("/proc/loadavg") as f:
+            return [round(float(x), 2) for x in f.read().split()[:3]]
     except Exception:
         return None
 
 # ---------------- 快照 + 历史 ----------------
 
 _history = {k: [] for k in (
-    "gen_tps", "mtp", "cpu", "ram",
+    "prefill_tps", "decode_tps", "cpu", "ram",
     "gpu_util0", "gpu_util1", "gpu_temp0", "gpu_temp1", "vram0", "vram1",
     "pcie_rx0", "pcie_rx1", "pcie_tx0", "pcie_tx1",
     "disk_r", "disk_w",
@@ -991,13 +1014,18 @@ def snapshot(m=None):
     d = disks()
     e = edac()
     log = llama_log_speeds()
-
+    # prefill 速度：ninfer 取 /metrics prefill_tokens_per_second gauge（服务端 5s 窗口平滑）；
+    # llama 无实时速度，取最近结束请求的 prompt eval 整段均值
+    pf_live = log.get("prefill_live")
+    pf_prompt = log.get("prompt")
+    prefill_tps = (pf_live["tps"] if pf_live and pf_live["tps"] > 0
+                   else (pf_prompt["tps"] if pf_prompt and pf_prompt.get("ts") is not None
+                         and 0 <= time.time() - pf_prompt["ts"] <= 15 else None))
     h = {
+        "prefill_tps": prefill_tps,
         # metrics 的 tokens_predicted_total 只在请求结束时跳变，
         # 生成中的速度曲线改用日志里服务端自测的 tg_3s
-        "gen_tps": (log["gen_live"]["tg_3s"] if log.get("gen_live") else None),
-        "mtp": (m["mtp"]["accept_inst"] if m and m["mtp"]["accept_inst"] is not None
-                else (m["mtp"]["accept"] if m else None)),
+        "decode_tps": (log["gen_live"]["tg_3s"] if log.get("gen_live") else None),
         "cpu": c,
         "ram": memd["pct"],
         "disk_r": d["read_mbps"],
@@ -1057,8 +1085,11 @@ def sampler():
             # 约定：快路径只替换已有 key 的值，不增删 key。
             # GIL 下 dict 单 key 赋值是原子的，HTTP 线程并发 json.dumps 安全；
             # 若要给 _latest 加新 key，必须改为整体替换快照。
+            # up 仅 llama 后端由 /metrics 可达性决定；ninfer 的 up 语义是“进程在”
+            # （模型加载中也算加载中），不能每 0.5s 被 metrics 未就绪刷成 False
+            if _latest["llama"]["backend"] == "llama":
+                _latest["llama"]["up"] = m is not None
             _latest["llama"]["metrics"] = m
-            _latest["llama"]["up"] = m is not None
             _latest["t"] = t0
         time.sleep(max(0.1, POLL_LLAMA - (time.time() - t0)))
 
@@ -1377,6 +1408,7 @@ def _write_unit_cmd(cmd):
     tmp = UNIT_FILE + ".tmp"
     with open(tmp, "w") as f:
         f.write("\n".join(out) + "\n")
+    os.chmod(tmp, 0o600)  # 单元文件含 --api-key，不给同机其他用户读
     os.replace(tmp, UNIT_FILE)
     r = subprocess.run(["systemctl", "daemon-reload"], capture_output=True, text=True, timeout=10)
     if r.returncode != 0:
@@ -1608,7 +1640,7 @@ def list_files(path):
     except Exception:
         pass
     parent = os.path.dirname(p)
-    if parent == p or not parent.startswith(FILES_ROOT):
+    if parent == p or not (parent == FILES_ROOT or parent.startswith(FILES_ROOT + os.sep)):
         parent = None
     return {"path": p, "parent": parent, "dirs": dirs, "files": files}
 
@@ -1664,6 +1696,10 @@ def cmd_save(new_cmd, restart=False):
     new_cmd = " ".join(new_cmd.split())
     if not new_cmd or "llama-server" not in new_cmd:
         return {"ok": False, "error": "命令为空或不含 llama-server"}
+    # 单引号是 systemd ExecStart 唯一的引用字符：整体校验引用必须成对闭合，
+    # 值内裸单引号会破坏引用结构、可注入额外参数
+    if " ".join(re.findall(r"'[^']*'|[^'\s]+", new_cmd)) != new_cmd:
+        return {"ok": False, "error": "命令含非法引号（只允许整个值用单引号包裹）"}
     err = _check_cmd_files(new_cmd)
     if err:
         return {"ok": False, "error": err}
@@ -1729,6 +1765,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _sse_logs(self, prio):
         """SSE 实时推送 journalctl -f 输出（ninfer 的级别写在正文，需按正文过滤）。"""
+        if prio not in ("info", "warning", "err"):  # 与 logs_tail 同一白名单
+            prio = "info"
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
@@ -1739,14 +1777,23 @@ class Handler(BaseHTTPRequestHandler):
             cmd += ["-p", prio]
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         try:
-            for line in p.stdout:
-                if ninfer:
-                    if prio == "err" and "[error]" not in line:
-                        continue
-                    if prio == "warning" and "[error]" not in line and "[warning]" not in line:
-                        continue
-                self.wfile.write(("data: " + line.rstrip("\n") + "\n\n").encode())
-                self.wfile.flush()
+            while True:
+                r, _, _ = select.select([p.stdout], [], [], 10)
+                if r:
+                    line = p.stdout.readline()
+                    if not line:  # journalctl 退出
+                        break
+                    if ninfer:
+                        if prio == "err" and "[error]" not in line:
+                            continue
+                        if prio == "warning" and "[error]" not in line and "[warning]" not in line:
+                            continue
+                    self.wfile.write(("data: " + line.rstrip("\n") + "\n\n").encode())
+                    self.wfile.flush()
+                else:
+                    # 心跳：客户端断连时写失败抛异常，进 finally 回收线程和 journalctl
+                    self.wfile.write(b": hb\n\n")
+                    self.wfile.flush()
         except Exception:
             pass
         finally:
@@ -1853,6 +1900,13 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         try:
             n = int(self.headers.get("Content-Length", 0))
+        except Exception:
+            n = 0
+        if n > 1048576:  # 业务 body 都很小，设上限防内存打爆
+            self._json(413, {"error": "请求体过大"})
+            return
+        try:
+            self.connection.settimeout(30)  # Content-Length 大于实际 body 时不至于无限阻塞
             data = json.loads(self.rfile.read(n).decode() or "{}")
         except Exception:
             self._json(400, {"error": "请求格式错误"})
@@ -1864,32 +1918,35 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json(200, {"token": tok})
             return
-        if not self._admin_token():
-            self._json(401, {"error": "未登录"})
-            return
-        if path == "/api/admin/service":
-            self._json(200, service_action(data.get("action", "")))
-            return
-        if path == "/api/admin/test":
-            self._json(200, test_generation(data.get("prompt", ""), data.get("n_predict", 64)))
-            return
-        if path == "/api/admin/cmd":
-            self._json(200, cmd_save(data.get("cmd", ""), bool(data.get("restart"))))
-            return
-        if path == "/api/admin/cmd/hist/rename":
-            self._json(200, hist_rename(data.get("cmd", ""), data.get("name", "")))
-            return
-        if path == "/api/admin/cmd/hist/delete":
-            self._json(200, hist_delete(data.get("cmd", "")))
-            return
-        if path == "/api/admin/password":
-            err = change_password(data.get("old", ""), data.get("new", ""))
-            if err:
-                self._json(400, {"error": err})
-            else:
-                self._json(200, {"ok": True})
-            return
-        self._json(404, {"error": "未找到"})
+        try:
+            if not self._admin_token():
+                self._json(401, {"error": "未登录"})
+                return
+            if path == "/api/admin/service":
+                self._json(200, service_action(data.get("action", "")))
+                return
+            if path == "/api/admin/test":
+                self._json(200, test_generation(data.get("prompt", ""), data.get("n_predict", 64)))
+                return
+            if path == "/api/admin/cmd":
+                self._json(200, cmd_save(data.get("cmd", ""), bool(data.get("restart"))))
+                return
+            if path == "/api/admin/cmd/hist/rename":
+                self._json(200, hist_rename(data.get("cmd", ""), data.get("name", "")))
+                return
+            if path == "/api/admin/cmd/hist/delete":
+                self._json(200, hist_delete(data.get("cmd", "")))
+                return
+            if path == "/api/admin/password":
+                err = change_password(data.get("old", ""), data.get("new", ""))
+                if err:
+                    self._json(400, {"error": err})
+                else:
+                    self._json(200, {"ok": True})
+                return
+            self._json(404, {"error": "未找到"})
+        except Exception:
+            self._json(500, {"error": "内部错误"})
 
 def main():
     ThreadingHTTPServer.daemon_threads = True

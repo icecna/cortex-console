@@ -29,16 +29,16 @@
 <!-- ===== 主指标栏 ===== -->
 <section class="kpis">
   <div class="kpi">
+    <div class="kpi-label">填充速度</div>
+    <div class="kpi-value" id="k_pf">—<span class="u">t/s</span></div>
+    <div class="kpi-sub" id="k_pf_sub"></div>
+    <canvas class="kpi-spark" id="k_pf_c"></canvas>
+  </div>
+  <div class="kpi">
     <div class="kpi-label">生成速度</div>
     <div class="kpi-value" id="k_gen">—<span class="u">t/s</span></div>
     <div class="kpi-sub" id="k_gen_sub"></div>
     <canvas class="kpi-spark" id="k_gen_c"></canvas>
-  </div>
-  <div class="kpi">
-    <div class="kpi-label">MTP 接受率</div>
-    <div class="kpi-value" id="k_mtp">—<span class="u">%</span></div>
-    <div class="kpi-sub" id="k_mtp_sub">实时 —</div>
-    <canvas class="kpi-spark" id="k_mtp_c"></canvas>
   </div>
   <div class="kpi">
     <div class="kpi-label">GPU 利用率</div>
@@ -96,7 +96,7 @@
     <section class="section">
       <h2>MTP 投机解码</h2>
       <div class="defs">
-        <div class="def"><span class="k">实时接受率</span><span class="v" id="mtp_inst">—</span></div>
+        <div class="def"><span class="k">接受率</span><span class="v" id="mtp_inst">—</span></div>
         <div class="def"><span class="k">tokens/round</span><span class="v" id="mtp_round">—</span></div>
         <div class="def"><span class="k">各位置接受率</span><span class="v" id="mtp_pos">—</span></div>
         <div class="def"><span class="k">验证步数</span><span class="v" id="mtp_drafts">—</span></div>
@@ -243,11 +243,14 @@ function render(d) {
   const g = d.gpus;
   const LG = L.log;
   let cumAvg = null;
-  if (M && M.tokens && M.tokens.predicted > 0 && M.tokens.predicted_seconds > 0) {
+  if (BE === "ninfer") {
+    // ninfer 的 predicted 是服务启动以来累计，predicted_seconds 却是 dashboard
+    // 启动以来的 decode 秒数，相除会虚高；直接用后端 decode-only 均值
+    cumAvg = M && M.gen_tps_avg;
+  } else if (M && M.tokens && M.tokens.predicted > 0 && M.tokens.predicted_seconds > 0) {
     cumAvg = M.tokens.predicted / M.tokens.predicted_seconds;
   }
   const cumStr = cumAvg != null ? "累计平均 " + fmt(cumAvg, 1) + " t/s" : "";
-  // 速度取日志里服务端自测值（metrics 计数器只在请求结束时跳变，生成中恒为 0）
   const live = LG && LG.gen_live;
   const pf = LG && LG.prefill_live;
   const genWin = BE === "ninfer" ? 2 : 15;
@@ -256,27 +259,29 @@ function render(d) {
   // GPU 全部为 0 时立刻判空闲，不等 genWin 窗口
   const lastGen = LG && LG.gen && LG.gen.ts != null
     && (gpuBusy || (!gpuAllZero && (d.t - LG.gen.ts) <= genWin));
+  // 填充速度：ninfer 取 /metrics gauge 实时值；llama 无实时速度，取最近结束请求的 prompt eval 均值
+  const pfDone = LG && LG.prompt && LG.prompt.ts != null && (d.t - LG.prompt.ts) <= 15;
+  if (pf && pf.ts != null && (d.t - pf.ts) <= 10 && !gpuAllZero) {
+    $("k_pf").innerHTML = '<span class="num">' + fmt(pf.tps, 1) + '</span><span class="u">t/s</span>';
+    $("k_pf_sub").textContent = "实时" + (pf.waiting ? " · 排队 " + pf.waiting : "");
+  } else if (pfDone) {
+    $("k_pf").innerHTML = '<span class="num dim">' + fmt(LG.prompt.tps, 1) + '</span><span class="u">t/s</span>';
+    $("k_pf_sub").textContent = "最近请求 · " + fmt(LG.prompt.tokens) + " tokens";
+  } else {
+    $("k_pf").innerHTML = '<span class="num dim">空闲</span>';
+    $("k_pf_sub").textContent = "";
+  }
   if (live && !gpuAllZero) {
     $("k_gen").innerHTML = '<span class="num">' + fmt(live.tg, 1) + '</span><span class="u">t/s</span>';
-    // n_gen 为 null 说明来自 /metrics counter 差值（实时）；有值则来自 done 行兜底（整请求值）
+    // n_gen 为 null 说明来自 /metrics gauge（实时）；有值则来自 done 行兜底（整请求值）
     $("k_gen_sub").textContent = (BE === "ninfer" && live.n_gen != null ? "刚结束 " : (BE === "ninfer" ? "实时 " : "3s ")) + fmt(live.tg_3s, 1) + " t/s" + (cumStr ? " · " + cumStr : "");
-  } else if (pf && pf.ts != null && (d.t - pf.ts) <= 10 && !gpuAllZero) {
-    $("k_gen").innerHTML = '<span class="num">' + fmt(pf.tps, 1) + '</span><span class="u">t/s</span>';
-    $("k_gen_sub").textContent = "prefill 中" + (pf.waiting ? " · 排队 " + pf.waiting : "") + (cumStr ? " · " + cumStr : "");
   } else if (lastGen) {
     $("k_gen").innerHTML = '<span class="num dim">' + fmt(LG.gen.tps, 1) + '</span><span class="u">t/s</span>';
-    const pf2 = LG.gen.prefill_tps != null ? " · prefill " + fmt(LG.gen.prefill_tps, 1) + " t/s" : "";
-    $("k_gen_sub").textContent = "刚结束" + pf2 + (cumStr ? " · " + cumStr : "");
+    $("k_gen_sub").textContent = "刚结束" + (cumStr ? " · " + cumStr : "");
   } else {
     $("k_gen").innerHTML = '<span class="num dim">空闲</span>';
     $("k_gen_sub").textContent = cumStr;
   }
-  const mtpAcc = M && M.mtp ? M.mtp.accept : null;
-  $("k_mtp").innerHTML = '<span class="num">' + fmt(mtpAcc, 1) + '</span><span class="u">%</span>';
-  $("k_mtp_sub").textContent = (M && M.mtp && M.mtp.accept_inst != null)
-    ? "实时 " + fmt(M.mtp.accept_inst, 1) + "%"
-    : (BE === "ninfer" && M && M.mtp && M.mtp.tok_per_round != null
-       ? fmt(M.mtp.tok_per_round, 2) + " tok/round · 最近请求" : "实时 —");
   const utils = g.map(x => x.util).filter(v => v != null);
   const gpuAvg = utils.length ? utils.reduce((a, b) => a + b, 0) / utils.length : null;
   $("k_gpu").innerHTML = '<span class="num">' + fmt(gpuAvg) + '</span><span class="u">%</span>';
@@ -289,8 +294,8 @@ function render(d) {
   $("k_mem").innerHTML = '<span class="num">' + fmt(d.mem.used_gb, 1) + '</span><span class="u">/ ' + fmt(d.mem.total_gb, 1) + ' GB</span>';
   $("k_mem_sub").textContent = fmt(d.mem.pct, 1) + "% 已用";
 
-  chart($("k_gen_c"), [{ color: "#58a6ff", data: d.history.gen_tps }], 100, 30);
-  chart($("k_mtp_c"), [{ color: "#bc8cff", data: d.history.mtp }], 100, 30);
+  chart($("k_pf_c"), [{ color: "#d29922", data: d.history.prefill_tps }], 100, 30);
+  chart($("k_gen_c"), [{ color: "#58a6ff", data: d.history.decode_tps }], 100, 30);
   chart($("k_gpu_c"), [{ color: "#3fb950", data: d.history.gpu_util0 || [] }], 100, 30);
   chart($("k_vram_c"), [{ color: "#b18cff", data: d.history.vram0 || [] }], 0, 30);
   chart($("k_cpu_c"), [{ color: "#d29922", data: d.history.cpu }], 100, 30);
@@ -315,7 +320,9 @@ function render(d) {
   if (M) {
     $("gen_req").textContent = fmt(M.requests.processing) + " / " + fmt(M.requests.deferred);
     const t = M.mtp;
-    $("mtp_inst").textContent = t.accept_inst != null ? fmt(t.accept_inst, 1) + "%" : "—";
+    // 实时值（近 15s 窗口）优先，空闲时回退累计值，避免页面一直显示 “—”
+    const accInst = t.accept_inst != null ? t.accept_inst : t.accept;
+    $("mtp_inst").textContent = accInst != null ? fmt(accInst, 1) + "%" : "—";
     $("mtp_round").textContent = t.tok_per_round != null ? fmt(t.tok_per_round, 2) : "—";
     $("mtp_pos").textContent = Object.entries(t.pos || {})
       .map(([k, v]) => "P" + k + ": " + fmt(v, 1) + "%").join("  ") || "—";
