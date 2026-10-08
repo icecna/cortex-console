@@ -1,0 +1,16 @@
+[Unit]
+Description=AI Server Dashboard (model server + hardware monitor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=__DASH_DIR__
+ExecStart=/usr/bin/python3 app.py
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

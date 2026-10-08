@@ -4,3 +4,4 @@ cmd_history.json
 *.pyc
 nohup.out
 *.log
+admin-password.txt

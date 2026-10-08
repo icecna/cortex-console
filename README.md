@@ -5,6 +5,8 @@
 - 监控页 `http://<ip>:80` 或 `:8090`（`index.html`）：GPU / PCIe / 内存 / 磁盘 / 推理指标
 - 管理页 `/admin`（`admin.html`）：服务控制、后端切换、启动参数编辑、实时日志、生成测试
 
+安装见 [INSTALL.md](INSTALL.md)（`sudo ./install.sh`，幂等，支持 `--uninstall`）。
+
 ## 架构
 
 ```
