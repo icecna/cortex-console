@@ -116,7 +116,7 @@ fi
 echo "==> 部署 cortex-console 到 $DASH_DIR"
 mkdir -p "$DASH_DIR"
 for f in app.py index.html admin.html themes.html style.css themes.css \
-         README.md INSTALL.md cortex-console.service.in ai-server.service.in; do
+         dispatch.sh README.md INSTALL.md cortex-console.service.in ai-server.service.in; do
   src="$SRC_DIR/$f" dst="$DASH_DIR/$f"
   [ -f "$src" ] || continue
   if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
@@ -157,12 +157,19 @@ SRC_LAUNCHERS="$SRC_DIR/../ai-launchers"
 if [ "$NO_AI" = 1 ]; then
   info "--no-ai-server: 跳过 launcher / conf / ai-server.service"
 elif [ ! -d "$SRC_LAUNCHERS" ]; then
-  # 源目录缺失：若目标目录已有 dispatch.sh（就地升级场景）则用目标自身作源，否则跳过
+  # 源目录缺失：若目标目录已有 dispatch.sh（就地升级场景）则用目标自身作源，
+  # 否则只部署仓库内的 dispatch.sh，首个 launcher 可在管理页“ai-server 配置”里新建
   if [ -x "$LAUNCHERS_DIR/dispatch.sh" ]; then
     SRC_LAUNCHERS="$LAUNCHERS_DIR"
     warn "launcher 源目录不存在，改用已安装的 $LAUNCHERS_DIR 自身"
   else
-    warn "launcher 源目录不存在（$SRC_LAUNCHERS），跳过 ai-server 部分（同 --no-ai-server）"
+    mkdir -p "$LAUNCHERS_DIR"
+    if [ -f "$SRC_DIR/dispatch.sh" ]; then
+      cp -f "$SRC_DIR/dispatch.sh" "$LAUNCHERS_DIR/dispatch.sh"
+      chmod +x "$LAUNCHERS_DIR/dispatch.sh"
+      note "已部署 dispatch.sh（无 launcher 源，首个 launcher 请在管理页新建）"
+    fi
+    warn "launcher 源目录不存在（$SRC_LAUNCHERS），跳过 conf / ai-server.service"
     NO_AI=1
   fi
 fi

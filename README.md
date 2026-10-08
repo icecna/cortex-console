@@ -50,7 +50,19 @@ admin 页 → 服务控制 tab → **🔀 后端切换**：
    - 临时文件 + `os.replace` 原子改写 LAUNCHER 行（只改 LAUNCHER 行，其余逐字保留）
    - `systemctl restart ai-server`
    - 前端轮询服务状态最多 3 分钟（等模型加载），期间禁用启停按钮
-   - 切换成功后自动刷新"启动参数"表单（后端变了，参数跟着变）
+   - 切换成功后自动刷新“启动参数”表单（后端变了，参数跟着变）
+
+### 编辑 conf / 启动脚本（管理页）
+
+admin 页 → 启动参数 tab → **📄 ai-server 配置**：
+
+- 直接编辑 `/etc/ai-server.conf` 全文和当前 launcher 脚本，保存时各自独立校验：
+  - conf：未注释的 `LAUNCHER=` 必须恰好一行，且指向真实存在的可执行脚本
+  - 脚本：非空 + `bash -n` 语法检查 + 保持可执行权限
+  - 均为原子写 + `.bak` 备份；“保存并重启”会重启 ai-server 并轮询等待就绪
+- **新建 launcher**：输入名字生成骨架脚本（占位 `exec sleep infinity` + TODO），
+  创建后自动在 conf 里追加 `LAUNCHER=<name>` 行，再编辑脚本内容即可
+- 新机器从零到可用：安装 → 管理页新建 launcher → 编辑脚本 → 保存并重启，全程不用 SSH
 
 ### 命令行切换
 
@@ -86,6 +98,9 @@ journalctl -u ai-server -f   # 看启动日志
 | POST | `/api/admin/service` | `{action: start/stop/restart}` |
 | GET | `/api/admin/launcher` | 当前 LAUNCHER + 可选后端列表 |
 | POST | `/api/admin/launcher` | `{launcher: <name>}` 切换并重启（原子改 conf + 备份） |
+| GET | `/api/admin/ai-conf` | conf 全文 + 当前 launcher 脚本全文 |
+| POST | `/api/admin/ai-conf` | 保存 conf 和/或脚本（`{conf, script, restart}`，各自独立校验，原子写 + 备份） |
+| POST | `/api/admin/ai-conf/new` | 新建 launcher 骨架脚本（`{name}`） |
 | GET | `/api/admin/health` | 进程 CPU/内存/运行时长 + API 探测 |
 | GET | `/api/admin/cmd` | 当前启动参数（ninfer 后端读 launcher 脚本/进程 cmdline） |
 | POST | `/api/admin/cmd` | 保存启动参数（`{cmd, restart}`） |
@@ -119,4 +134,10 @@ admin.html    管理页
 themes.html   主题选择页
 style.css     主样式
 themes.css    主题皮肤
+install.sh    安装/卸载脚本
+README.md     本文档
+INSTALL.md    安装说明
+dispatch.sh   ai-server 分发器（launcher 源缺失时由 install.sh 部署）
+cortex-console.service.in   systemd unit 模板（路径占位符由 install.sh 替换）
+ai-server.service.in        同上
 ```

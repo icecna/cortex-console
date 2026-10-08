@@ -67,6 +67,8 @@ sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 - 全程 `set -euo pipefail`，任一步失败立即退出并打印已完成步骤清单
 - 自动 `mkdir -p` 缺失目录；launcher 脚本安装后做 `bash -n` 语法校验
 - **不碰**：模型文件、NInfer 编译产物、`admin.json`、`cmd_history.json`
+- **无 launcher 源时降级**：仓库内带 `dispatch.sh`，即使 `../ai-launchers` 不存在也会部署它；
+  首个 launcher 脚本可在管理页“ai-server 配置 → 新建 launcher”创建，之后重跑 `install.sh` 补齐 conf 和 unit
 - launcher 脚本内的机器相关路径（模型文件、二进制、host IP）原样复制，**装完按需修改**，改完在 admin 页"后端切换"或 `systemctl restart ai-server` 生效
 
 ## 验证

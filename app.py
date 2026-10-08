@@ -1292,6 +1292,126 @@ def launcher_switch(name):
             "launcher": name,
             "state": info}
 
+def _ai_conf_text():
+    try:
+        with open(AI_SERVER_CONF) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+def _ai_conf_current(conf_text):
+    """取第一个未注释 LAUNCHER 行（与 dispatch.sh 语义一致）。"""
+    for line in conf_text.splitlines():
+        m = re.match(r"^LAUNCHER\s*=\s*(\S+)", line)
+        if m:
+            return m.group(1)
+    return ""
+
+def _atomic_write(path, text, mode=None):
+    """备份旧内容到 .bak，临时文件 + os.replace 原子替换。"""
+    if os.path.isfile(path):
+        with open(path) as f:
+            old = f.read()
+        with open(path + ".bak", "w") as f:
+            f.write(old)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    if mode is not None:
+        os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+def ai_conf_info():
+    """conf 全文 + 当前 launcher 脚本全文（管理页“ai-server 配置”卡片用）。"""
+    conf = _ai_conf_text()
+    cur = _ai_conf_current(conf)
+    script = ""
+    script_path = None
+    if cur:
+        p = os.path.join(AI_LAUNCHERS_DIR, cur + ".sh")
+        if os.path.isfile(p):
+            script_path = p
+            try:
+                with open(p) as f:
+                    script = f.read()
+            except OSError:
+                pass
+    return {"conf": conf, "current": cur, "script": script, "script_path": script_path}
+
+def ai_conf_save(conf_text=None, script_text=None, restart=False):
+    """保存 conf 和/或当前 launcher 脚本（各自独立校验，原子写 + 备份），可选重启。"""
+    saved = []
+    with _launcher_lock:
+        if conf_text is not None:
+            cur = ""
+            for line in conf_text.splitlines():
+                m = re.match(r"^LAUNCHER\s*=\s*(\S+)", line)
+                if m:
+                    if cur:
+                        return {"ok": False, "error": "conf 中未注释的 LAUNCHER 行必须恰好一行"}
+                    cur = m.group(1)
+            if not cur:
+                return {"ok": False, "error": "conf 中必须有一行未注释的 LAUNCHER="}
+            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", cur):
+                return {"ok": False, "error": "LAUNCHER 值非法: %s" % cur}
+            target = os.path.join(AI_LAUNCHERS_DIR, cur + ".sh")
+            if not (os.path.isfile(target) and os.access(target, os.X_OK)):
+                return {"ok": False, "error": "LAUNCHER 指向的脚本不存在或不可执行: %s.sh（请先新建该 launcher）" % cur}
+            _atomic_write(AI_SERVER_CONF, conf_text)
+            saved.append("conf")
+        if script_text is not None:
+            if not script_text.strip():
+                return {"ok": False, "error": "脚本内容不能为空"}
+            cur = _ai_conf_current(_ai_conf_text())
+            if not cur:
+                return {"ok": False, "error": "conf 中没有有效 LAUNCHER，无法确定保存哪个脚本"}
+            path = os.path.join(AI_LAUNCHERS_DIR, cur + ".sh")
+            if not os.path.isfile(path):
+                return {"ok": False, "error": "脚本不存在: %s" % path}
+            # bash -n 语法检查（在临时文件上做，不碰原文件）
+            chk = path + ".syntax"
+            with open(chk, "w") as f:
+                f.write(script_text)
+            r = subprocess.run(["bash", "-n", chk], capture_output=True, text=True, timeout=10)
+            os.unlink(chk)
+            if r.returncode != 0:
+                err = (r.stderr.strip().splitlines() or ["语法错误"])[-1]
+                return {"ok": False, "error": "bash 语法检查失败: %s" % err}
+            _atomic_write(path, script_text, mode=0o755)
+            saved.append("脚本 %s.sh" % cur)
+    if restart:
+        try:
+            r = subprocess.run(["systemctl", "restart", "ai-server"],
+                               capture_output=True, text=True, timeout=180)
+            time.sleep(2)
+            state = service_info()
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "saved": saved,
+                    "error": "重启超时（180s），配置已保存，请手动检查: systemctl status ai-server"}
+        if r.returncode != 0:
+            return {"ok": False, "saved": saved, "error": r.stderr.strip() or "重启失败"}
+    return {"ok": True, "saved": saved, "state": service_info() if restart else None}
+
+def launcher_create(name):
+    """新建 launcher 骨架脚本（可执行），之后在管理页编辑内容。"""
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", name):
+        return {"ok": False, "error": "非法 launcher 名: %s" % name}
+    path = os.path.join(AI_LAUNCHERS_DIR, name + ".sh")
+    if os.path.exists(path):
+        return {"ok": False, "error": "已存在: %s.sh" % name}
+    skeleton = """#!/usr/bin/env bash
+set -euo pipefail
+
+# TODO: 替换为实际启动命令（前台运行，监听 8080，崩溃时非零退出）
+# exec /path/to/your-server --port 8080 ...
+exec sleep infinity   # 占位：未配置前保持进程存活便于查看日志
+"""
+    with _launcher_lock:
+        if os.path.exists(path):  # 双检，防并发
+            return {"ok": False, "error": "已存在: %s.sh" % name}
+        _atomic_write(path, skeleton, mode=0o755)
+    return {"ok": True, "name": name, "path": path}
+
 def proc_health(pid):
     """从 /proc 读进程 CPU 占用（0.5s 采样）、内存、运行时长。"""
     try:
@@ -2274,6 +2394,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(200, launcher_info())
             return
+        if path == "/api/admin/ai-conf":
+            if not self._admin_token():
+                self._json(401, {"error": "未登录"})
+                return
+            self._json(200, ai_conf_info())
+            return
         if path == "/api/admin/health":
             if not self._admin_token():
                 self._json(401, {"error": "未登录"})
@@ -2379,6 +2505,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/admin/launcher":
                 self._json(200, launcher_switch(str(data.get("launcher", ""))))
+                return
+            if path == "/api/admin/ai-conf":
+                self._json(200, ai_conf_save(data.get("conf"), data.get("script"),
+                                             bool(data.get("restart"))))
+                return
+            if path == "/api/admin/ai-conf/new":
+                self._json(200, launcher_create(str(data.get("name", ""))))
                 return
             if path == "/api/admin/test":
                 self._json(200, test_generation(data.get("prompt", ""), data.get("n_predict", 64)))
