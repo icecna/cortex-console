@@ -1256,7 +1256,19 @@ def health_info():
     return {"proc": proc_health(svc["pid"]) if svc.get("pid") else None,
             "api": probe_llama()}
 
-def logs_tail(n, prio, since_hours=None):
+# journald 前缀（"Oct 08 17:06:04 debian dispatch.sh[503738]: "）：ninfer 行内已带
+# 毫秒级时间戳，前缀是重复信息，展示视图里去掉
+_JOURNAL_PREFIX_RE = re.compile(r"^\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+: ")
+
+def _ninfer_view_lines(lines):
+    """ninfer 展示视图（日志面板/流式推送）清洗：
+    去掉 journald 前缀（行内已有毫秒级时间戳）。
+    原始日志（下载/排障）不走这里。"""
+    return [_JOURNAL_PREFIX_RE.sub("", l, count=1) for l in lines]
+
+def logs_tail(n, prio, since_hours=None, clean=True):
+    """clean=True 时 ninfer 行走 _ninfer_view_lines 清洗（展示视图）；
+    下载原始日志传 clean=False。"""
     if prio not in ("info", "warning", "err"):
         prio = "info"
     try:
@@ -1282,6 +1294,8 @@ def logs_tail(n, prio, since_hours=None):
             lines = [l for l in lines if "[error]" in l]
         elif prio == "warning":
             lines = [l for l in lines if "[error]" in l or "[warning]" in l]
+        if clean:
+            lines = _ninfer_view_lines(lines)
         # journalctl -n 返回最近 N 行（时间升序），过滤后取尾部 = 最新的 n 行
         return "\n".join(lines[-n:])
     cmd = ["journalctl", "-u", unit, "-n", str(n), "-p", prio, "--no-pager", "-q"]
@@ -1506,6 +1520,303 @@ BOOL_FIELDS = [("--metrics", "metrics"), ("--no-host", "no_host"),
                ("--context-shift", "context_shift"),
                ("--no-webui", "no_webui")]
 
+# ---------------- NInfer launcher 参数（编辑 launcher 脚本） ----------------
+# NInfer 后端由 /etc/ai-server.conf 的 LAUNCHER 选择 /mnt/models/ai-launchers/<name>.sh；
+# 管理页编辑的就是该 wrapper 脚本（保留 preamble/exec 主程序，只重建参数段）。
+LAUNCHER_CONF = "/etc/ai-server.conf"
+LAUNCHER_DIR = "/mnt/models/ai-launchers"
+
+# 一级字段（顺序即脚本重建时的参数顺序）
+NINFER_NUM = [  # 数字 / 自由值
+    ("--port", "port"), ("--max-concurrency", "max_concurrency"),
+    ("--max-context", "max_context"), ("--kv-capacity", "kv_capacity"),
+    ("--prefill-chunk", "prefill_chunk"),
+    ("--context-host-cache-mib", "context_host_cache_mib"),
+    ("--default-max-tokens", "default_max_tokens"),
+    ("--draft-tokens", "draft_tokens"), ("--vision-max-tokens", "vision_max_tokens"),
+    ("--temperature", "temperature"), ("--top-p", "top_p"),
+    ("--top-k", "top_k"), ("--min-p", "min_p"),
+    ("--presence-penalty", "presence_penalty"), ("--frequency-penalty", "frequency_penalty"),
+    ("--seed", "seed"), ("--pending-timeout-ms", "pending_timeout_ms"),
+    ("--max-pending-requests", "max_pending_requests"),
+    ("--yarn-factor", "yarn_factor"), ("--yarn-origin", "yarn_origin"),
+]
+NINFER_SEL = [  # 下拉（选项见 admin.html）
+    ("--kv-dtype", "kv_dtype"), ("--spec", "spec"), ("--rope", "rope"), ("--tp", "tp"),
+]
+NINFER_TXT = [  # 文本
+    ("--host", "host"), ("--devices", "devices"),
+    ("--api-key", "api_key"), ("--model-id", "model_id"),
+    ("--max-request-mib", "max_request_mib"),
+]
+NINFER_CHK = [  # 布尔开关
+    ("--vision", "vision"), ("--lm-head-draft", "lm_head_draft"),
+    ("--no-prefix-reuse", "no_prefix_reuse"), ("--no-cuda-graph", "no_cuda_graph"),
+    ("--no-thinking", "no_thinking"), ("--preserve-thinking", "preserve_thinking"),
+    ("--greedy", "greedy"), ("--cors", "cors"),
+]
+NINFER_VALUE_FIELDS = NINFER_NUM + NINFER_SEL + NINFER_TXT  # 取值型（含下拉）
+
+# 完整 flag 语义（取自 ninfer-serve --help）：用于把未列为一级字段的参数
+# 连同其取值一起收进 custom，避免拆散。_VALUE 型需消费下一个 token。
+_NINFER_VALUE_FLAGS = {p for p, _ in NINFER_VALUE_FIELDS} | {
+    "--log-stats-interval-ms", "--device", "--media-cache-mib", "--media-live-mib",
+    "--media-preprocess-threads", "--request-log-jsonl", "--response-store-max-records",
+    "--response-store-max-mib",
+}
+_NINFER_BOOL_FLAGS = {p for p, _ in NINFER_CHK}
+
+
+def ninfer_launcher_name():
+    """读 /etc/ai-server.conf 的 LAUNCHER（当前激活 launcher 名）。"""
+    try:
+        with open(LAUNCHER_CONF) as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("LAUNCHER="):
+                    return s.split("=", 1)[1].strip() or None
+    except Exception:
+        return None
+    return None
+
+
+def ninfer_launcher_file():
+    """返回 (launcher 名, wrapper 脚本路径)；路径不存在时路径为 None。"""
+    name = ninfer_launcher_name()
+    if not name:
+        return None, None
+    path = os.path.join(LAUNCHER_DIR, name + ".sh")
+    return name, (path if os.path.isfile(path) else None)
+
+
+_NINFER_FIELD_MAP = {p: k for p, k in NINFER_VALUE_FIELDS + NINFER_CHK}
+
+
+def _ninfer_empty():
+    d = {k: "" for _, k in NINFER_VALUE_FIELDS}
+    d.update({k: False for _, k in NINFER_CHK})
+    d.update({"model": "", "binary": "", "model_form": "positional", "custom": "", "preamble": "", "order": []})
+    return d
+
+
+def _ninfer_parse_args(tokens, out):
+    """解析 flag 列表（不含 binary/model）到 out：一级字段 last-wins，未知进 custom。"""
+    i, n = 0, len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if tok in _NINFER_FIELD_MAP:
+            key = _NINFER_FIELD_MAP[tok]
+            if key not in out["order"]:
+                out["order"].append(key)
+            if tok in _NINFER_VALUE_FLAGS:
+                out[key] = tokens[i + 1] if i + 1 < n else ""
+                i += 1
+            else:
+                out[key] = True
+        elif tok in _NINFER_VALUE_FLAGS:
+            seg = [tok]
+            if i + 1 < n:
+                seg.append(tokens[i + 1])
+                i += 1
+            out["custom"] = (out["custom"] + " " + " ".join(seg)).strip()
+        elif tok in _NINFER_BOOL_FLAGS:
+            out["custom"] = (out["custom"] + " " + tok).strip()
+        else:
+            out["custom"] = (out["custom"] + " " + tok).strip()
+        i += 1
+    return out
+
+
+def parse_ninfer_script(path):
+    """解析 launcher wrapper：preamble（exec 之前逐字保留）+ exec 行 → 字段。"""
+    out = _ninfer_empty()
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except Exception:
+        return None
+    idx = next((i for i, l in enumerate(lines) if l.strip().startswith("exec ")), None)
+    if idx is None:
+        return None
+    out["preamble"] = "\n".join(lines[:idx])
+    raw = re.findall(r"'[^']*'|\"[^\"]*\"|\S+", " ".join(" ".join(lines[idx:]).split()))
+    tokens = [t for t in raw if t != "\\"]  # 去掉行续接符
+    if not tokens or tokens[0] != "exec" or len(tokens) < 3:
+        return None
+    out["binary"] = tokens[1]
+    if tokens[2].startswith("model="):  # Duo 形式：model=PATH
+        out["model_form"] = "kv"
+        out["model"] = tokens[2][len("model="):]
+    else:  # 直连形式：位置参数
+        out["model_form"] = "positional"
+        out["model"] = tokens[2]
+    _ninfer_parse_args(tokens[3:], out)
+    return out
+
+
+def parse_ninfer_cmdline(cmd):
+    """解析运行进程完整 cmdline（含 launcher 默认值）→ 有效字段值。last-wins。
+    只取字段值（不含 binary/model/model_form/preamble，那些以 wrapper 为准）。"""
+    out = _ninfer_empty()
+    if not cmd:
+        return out
+    tokens = [t for t in re.findall(r"'[^']*'|\"[^\"]*\"|\S+", cmd) if t != "\\"]
+    i = 1
+    if i < len(tokens) and not tokens[i].startswith("--"):  # model 位置参数
+        i += 1
+    _ninfer_parse_args(tokens[i:], out)
+    return out
+
+
+def _ninfer_build_parts(parsed):
+    model_arg = ("model=" if parsed.get("model_form") == "kv" else "") + parsed.get("model", "")
+    parts = ["exec", parsed.get("binary", ""), model_arg]
+    order = parsed.get("order") or []
+    value_map = {k: f for f, k in NINFER_VALUE_FIELDS}
+    chk_map = {k: f for f, k in NINFER_CHK}
+    def emit(key):
+        nonlocal parts
+        if key in value_map:
+            v = parsed.get(key)
+            if v not in ("", None):
+                parts += [value_map[key], str(v)]
+        elif key in chk_map:
+            if parsed.get(key):
+                parts.append(chk_map[key])
+    seen = set()
+    for key in order:                              # 保持原始顺序
+        emit(key); seen.add(key)
+    for key in list(value_map) + list(chk_map):    # 新增项按定义顺序追加
+        if key in seen:
+            continue
+        emit(key); seen.add(key)
+    custom = (parsed.get("custom") or "").strip()
+    if custom:
+        parts += custom.split()
+    return parts
+
+
+def _ninfer_format_exec(parts):
+    """parts → 带反斜杠续行的多行（首行 exec，续行缩进 2 空格、每行 ≤80 列）。"""
+    out = [" ".join(parts[:3])]
+    cur, n = "", 0
+    for tok in parts[3:]:
+        if not cur:
+            cur, n = tok, len(tok)
+        elif n + 1 + len(tok) <= 80:
+            cur += " " + tok
+            n += 1 + len(tok)
+        else:
+            out.append("  " + cur + " \\")
+            cur, n = tok, len(tok)
+    if cur:
+        out.append("  " + cur)
+    if len(out) > 1:          # 有续行时首行需加反斜杠
+        out[0] += " \\"
+    return out
+
+
+def ninfer_build_script(parsed):
+    pre = (parsed.get("preamble") or "")
+    if pre and not pre.endswith("\n"):
+        pre += "\n"
+    body = "\n".join(_ninfer_format_exec(_ninfer_build_parts(parsed)))
+    return pre + body + "\n"
+
+
+def ninfer_save(fields, restart=False):
+    """按表单字段重建 launcher wrapper 脚本并写盘，可选重启 ai-server。"""
+    name, path = ninfer_launcher_file()
+    if not path:
+        return {"ok": False, "error": "未找到当前 NInfer launcher 脚本（/etc/ai-server.conf 的 LAUNCHER）"}
+    if "llama" in (name or ""):
+        return {"ok": False, "error": "当前 LAUNCHER 不是 NInfer"}
+    cur = parse_ninfer_script(path)
+    if cur is None:
+        return {"ok": False, "error": "无法解析 launcher 脚本，请手动检查"}
+    new = dict(cur)
+    for flag, key in NINFER_VALUE_FIELDS:
+        new[key] = (fields.get(key) or "").strip()
+    for flag, key in NINFER_CHK:
+        new[key] = bool(fields.get(key))
+    new["model"] = (fields.get("model") or cur["model"]).strip()
+    new["custom"] = (fields.get("custom") or "").strip()
+    # 无 --spec 时不应残留投机解码参数
+    if not new.get("spec"):
+        new["draft_tokens"] = ""
+        new["lm_head_draft"] = False
+    # --lm-head-draft 只对 MTP 生效
+    elif new.get("spec") != "mtp":
+        new["lm_head_draft"] = False
+    # 无 --vision 时 --vision-max-tokens 不生效，一并清掉
+    if not new.get("vision"):
+        new["vision_max_tokens"] = ""
+    # 无 --rope yarn 时 YaRN 参数不生效，一并清掉
+    if new.get("rope") != "yarn":
+        new["yarn_factor"] = ""
+        new["yarn_origin"] = ""
+    # 跨字段校验（对应 ninfer-serve --help 约束，避免写出无法启动的脚本）
+    def _in_range(s, lo, hi):
+        try:
+            v = int(str(s).strip())
+        except (TypeError, ValueError):
+            return False
+        return lo <= v <= hi
+    def _err(msg):
+        return {"ok": False, "changed": False, "error": msg, "state": None}
+    spec, tp = new.get("spec"), new.get("tp")
+    if spec == "mtp" and not _in_range(new.get("draft_tokens"), 1, 5):
+        return _err("--spec mtp 需要 --draft-tokens 在 1..5")
+    if spec == "dflash":
+        if not _in_range(new.get("draft_tokens"), 1, 15):
+            return _err("--spec dflash 需要 --draft-tokens 在 1..15")
+        if new.get("vision"):
+            return _err("--spec dflash 与 --vision 互斥")
+        if tp == "2":
+            return _err("--spec dflash 与 --tp 2 互斥")
+        if new.get("rope") == "yarn":
+            return _err("--spec dflash 与 --rope yarn 互斥")
+    if new.get("rope") == "yarn" and new.get("vision"):
+        return _err("--rope yarn 与 --vision 互斥")
+    if tp == "2" and not (new.get("devices") or "").strip():
+        return _err("--tp 2 需要 --devices（如 0,1）")
+    if new.get("vision") and new.get("vision_max_tokens") \
+            and not _in_range(new.get("vision_max_tokens"), 1, 32768):
+        return _err("--vision-max-tokens 需在 1..32768")
+    if not new.get("binary"):
+        return {"ok": False, "error": "launcher 缺少 exec 主程序"}
+    if not new.get("model"):
+        return {"ok": False, "error": "model 不能为空"}
+    if not os.path.isfile(new["model"]):
+        return {"ok": False, "error": "model 文件不存在: " + new["model"]}
+    # 字段级比较：无实际改动则不写盘（避免无谓重建/重排）
+    edit_keys = [k for _, k in NINFER_VALUE_FIELDS + NINFER_CHK] + ["model", "custom"]
+    if all(new.get(k) == cur.get(k) for k in edit_keys):
+        return {"ok": True, "changed": False, "error": None, "state": None}
+    try:
+        with open(path) as f:
+            old_text = f.read()
+    except Exception as e:
+        return {"ok": False, "error": "读取脚本失败: %s" % e}
+    new_text = ninfer_build_script(new)
+    if new_text == old_text:
+        return {"ok": True, "changed": False, "error": None, "state": None}
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(new_text)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, path)
+    info = None
+    if restart:
+        r = subprocess.run(["systemctl", "restart", "ai-server"],
+                           capture_output=True, text=True, timeout=180)
+        time.sleep(1)
+        info = service_info()
+        if r.returncode != 0:
+            return {"ok": False, "error": r.stderr.strip() or "重启失败", "state": info}
+    return {"ok": True, "changed": True, "error": None, "state": info}
+
+
 def parse_cmd(cmd):
     """把启动命令拆成表单字段，未识别的参数留在 custom。"""
     d = {k: "" for _, k in NUM_FIELDS + SEL_FIELDS + TEXT_FIELDS + FILE_FIELDS}
@@ -1590,10 +1901,28 @@ def diff_brief(cmd, cur):
 def cmd_info():
     backend, pid, _ = detect_service()
     if backend == "ninfer":
-        # Q2-a：NInfer 启动参数由 launcher 脚本管理，管理页只读展示
-        return {"backend": "ninfer", "readonly": True,
-                "current": _proc_cmdline(pid)
-                           or "（服务未运行；启动后此处显示实际启动命令）",
+        name, path = ninfer_launcher_file()
+        base = parse_ninfer_script(path) if path else _ninfer_empty()
+        if base is None:
+            base = _ninfer_empty()
+        cmd = _proc_cmdline(pid)
+        source = "file"
+        if cmd:
+            # 服务运行中：用进程实际生效的参数值填充（launcher 默认值已展开），
+            # 但 binary/model/model_form/preamble 仍取 wrapper（写回时用）。
+            eff = parse_ninfer_cmdline(cmd)
+            for flag, key in NINFER_VALUE_FIELDS:
+                if eff.get(key):
+                    base[key] = eff[key]
+            for flag, key in NINFER_CHK:
+                base[key] = eff.get(key, False)
+            source = "process"
+        parsed = {k: base[k] for k in
+                  [k for _, k in NINFER_VALUE_FIELDS] + [k for _, k in NINFER_CHK]
+                  + ["model", "binary", "model_form", "custom"]}
+        return {"backend": "ninfer",
+                "ninfer": {"launcher": name, "file": path, "source": source, "parsed": parsed},
+                "current": cmd or "（服务未运行；启动后此处显示实际启动命令）",
                 "parsed": None, "history": []}
     cur = _read_unit_cmd()
     h = _load_hist()
@@ -1821,6 +2150,7 @@ class Handler(BaseHTTPRequestHandler):
                             continue
                         if prio == "warning" and "[error]" not in line and "[warning]" not in line:
                             continue
+                        line = _JOURNAL_PREFIX_RE.sub("", line, count=1)
                     self.wfile.write(("data: " + line.rstrip("\n") + "\n\n").encode())
                     self.wfile.flush()
                 else:
@@ -1907,7 +2237,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "未登录"})
                 return
             q = self._query()
-            text = logs_tail(q.get("n", "2000"), q.get("prio", "info"))
+            text = logs_tail(q.get("n", "2000"), q.get("prio", "info"), clean=False)  # 下载保留原始行
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Disposition", 'attachment; filename="llama-server.log"')
@@ -1967,6 +2297,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/admin/cmd":
                 self._json(200, cmd_save(data.get("cmd", ""), bool(data.get("restart"))))
+                return
+            if path == "/api/admin/ninfer":
+                self._json(200, ninfer_save(data.get("fields", {}) or {}, bool(data.get("restart"))))
                 return
             if path == "/api/admin/cmd/hist/rename":
                 self._json(200, hist_rename(data.get("cmd", ""), data.get("name", "")))

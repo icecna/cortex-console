@@ -76,15 +76,131 @@
       </section>
       </div>
       <div class="tabpanel active" id="tab_params">
-      <div id="cmd_readonly" style="display:none">
-        <section class="section">
-          <h2><span class="sico">⚙️</span>启动参数</h2>
-          <div class="msg warn">当前后端为 NInfer，启动参数由 launcher 脚本（/mnt/models/ai-launchers/ninfer-v100-duo.sh）与仓库默认值管理，本页只读。切换后端：编辑 /etc/ai-server.conf 后 systemctl restart ai-server。</div>
-          <div class="cmd" id="cmd_readonly_box">—</div>
-          <div class="btnrow" style="margin-top:10px">
-            <button class="btn" id="btn_readonly_copy">复制命令</button>
+      <div id="ninfer_area" style="display:none">
+      <section class="section">
+        <h2><span class="sico">⚙️</span>NInfer 启动参数</h2>
+        <div class="fhint" id="n_file_msg"></div>
+        <div class="nscroll">
+        <div class="fgroup">
+          <h3>模型与端点</h3>
+          <div class="frow">
+            <label class="flab" title="模型工件路径（.ninfer）">model 模型</label>
+            <input class="inp grow" id="n_model" readonly title="点击右侧按钮选择">
+            <button class="btn" onclick="openFileBrowser('n_model')">选择</button>
+            <button class="btn" onclick="clearFile('n_model')">清空</button>
           </div>
-        </section>
+          <div class="fgrid">
+            <div class="fcell"><label class="flab" title="监听地址">--host</label><input class="inp grow" id="n_host" placeholder="0.0.0.0"></div>
+            <div class="fcell"><label class="flab" title="监听端口">--port</label><input class="inp grow" id="n_port" type="number"></div>
+            <div class="fcell"><label class="flab" title="最大并发请求数">--max-concurrency</label><input class="inp grow" id="n_concurrency" type="number"></div>
+            <div class="fcell"><label class="flab" title="模型别名（/v1/models 显示）">--model-id</label><input class="inp grow" id="n_modelid"></div>
+          </div>
+          <div class="frow">
+            <label class="flab" title="API 密钥（对外暴露时建议设置，可逗号分隔多个）">--api-key</label>
+            <input class="inp grow" id="n_apikey" type="password" placeholder="API 密钥" autocomplete="off">
+          </div>
+        </div>
+        <div class="fgroup">
+          <h3>上下文与 KV 缓存</h3>
+          <div class="fgrid">
+            <div class="fcell"><label class="flab" title="最大上下文 token 数">--max-context</label><input class="inp grow" id="n_context" type="number"></div>
+            <div class="fcell"><label class="flab" title="KV 池容量（token 数或 auto）">--kv-capacity</label><input class="inp grow" id="n_kvcap" placeholder="N / auto"></div>
+            <div class="fcell"><label class="flab" title="KV 缓存数据类型">--kv-dtype</label>
+              <select class="inp grow sel" id="n_kvdtype">
+                <option value="">不设置</option><option value="int8">int8</option><option value="bf16">bf16</option>
+              </select>
+            </div>
+            <div class="fcell"><label class="flab" title="prefill 分块大小（token）">--prefill-chunk</label><input class="inp grow" id="n_chunk" type="number"></div>
+            <div class="fcell"><label class="flab" title="固定主机 KV 缓存（MiB，0=禁用）">--context-host-cache-mib</label><input class="inp grow" id="n_hostcache" type="number"></div>
+            <div class="fcell"><label class="flab" title="默认最大生成 token 数">--default-max-tokens</label><input class="inp grow" id="n_defmax" type="number"></div>
+          </div>
+          <div class="fgrid">
+            <div class="fcell"><label class="flab" title="位置编码扩展方式">--rope</label>
+              <select class="inp grow sel" id="n_rope">
+                <option value="">不设置</option><option value="native">native</option><option value="yarn">yarn</option>
+              </select>
+            </div>
+            <div class="fcell"><label class="flab" title="YaRN 频率倍数（--rope yarn）">--yarn-factor</label><input class="inp grow" id="n_yarnfactor" type="number" step="0.1"></div>
+            <div class="fcell"><label class="flab" title="YaRN 原始容量（--rope yarn）">--yarn-origin</label><input class="inp grow" id="n_yarnorigin" type="number"></div>
+          </div>
+          <div class="frow chkrow">
+            <label class="chk" title="禁用前缀缓存复用（默认启用）"><input type="checkbox" id="n_noprefix"> --no-prefix-reuse</label>
+          </div>
+        </div>
+        <div class="fgroup">
+          <h3>投机解码</h3>
+          <div class="fgrid">
+            <div class="fcell"><label class="flab" title="投机解码类型（MTP 内置头 / DFlash 草稿，与 Vision 部分互斥）">--spec</label>
+              <select class="inp grow sel" id="n_spec">
+                <option value="">不设置</option><option value="mtp">mtp</option><option value="dflash">dflash</option>
+              </select>
+            </div>
+            <div class="fcell"><label class="flab" title="投机草稿步数（MTP 1..5 / DFlash 1..15）">--draft-tokens</label><input class="inp grow" id="n_dmax" type="number" min="1"></div>
+          </div>
+          <div class="frow chkrow">
+            <label class="chk" title="草稿复用 lm-head（配合 MTP）"><input type="checkbox" id="n_lmhead"> --lm-head-draft</label>
+          </div>
+          <div class="fhint" id="n_spec_hint"></div>
+        </div>
+        <div class="fgroup">
+          <h3>视觉 · 多模态 <label class="chk nvis" title="启用视觉（加载固定 Vision GPU 显存）；关闭时 --vision-max-tokens 不生效"><input type="checkbox" id="n_vision"> --vision</label></h3>
+          <div class="fgrid">
+            <div class="fcell"><label class="flab" title="视觉最大 token 预算（1..32768）">--vision-max-tokens</label><input class="inp grow" id="n_vmax" type="number" min="1" max="32768"></div>
+          </div>
+        </div>
+        <div class="fgroup">
+          <h3>采样与推理</h3>
+          <div class="fgrid">
+            <div class="fcell"><label class="flab" title="采样温度（越低越确定）">--temperature</label><input class="inp grow" id="n_temp" type="number" step="0.05"></div>
+            <div class="fcell"><label class="flab" title="Top-P 采样">--top-p</label><input class="inp grow" id="n_topp" type="number" step="0.01"></div>
+            <div class="fcell"><label class="flab" title="Top-K 采样">--top-k</label><input class="inp grow" id="n_topk" type="number"></div>
+            <div class="fcell"><label class="flab" title="最小概率（0=禁用）">--min-p</label><input class="inp grow" id="n_minp" type="number" step="0.01"></div>
+            <div class="fcell"><label class="flab" title="存在惩罚">--presence-penalty</label><input class="inp grow" id="n_pp" type="number" step="0.01"></div>
+            <div class="fcell"><label class="flab" title="频率惩罚">--frequency-penalty</label><input class="inp grow" id="n_fp" type="number" step="0.01"></div>
+            <div class="fcell"><label class="flab" title="随机种子（固定可复现）">--seed</label><input class="inp grow" id="n_seed" type="number"></div>
+          </div>
+          <div class="frow chkrow">
+            <label class="chk" title="强制贪心（temperature 0）"><input type="checkbox" id="n_greedy"> --greedy</label>
+            <label class="chk" title="关闭思考模式"><input type="checkbox" id="n_nothinking"> --no-thinking</label>
+            <label class="chk" title="保留已闭合回合的推理内容"><input type="checkbox" id="n_preserve"> --preserve-thinking</label>
+          </div>
+        </div>
+        <div class="fgroup">
+          <h3>性能与设备</h3>
+          <div class="fgrid">
+            <div class="fcell"><label class="flab" title="张量并行度">--tp</label>
+              <select class="inp grow sel" id="n_tp">
+                <option value="">不设置</option><option value="1">1</option><option value="2">2</option>
+              </select>
+            </div>
+            <div class="fcell"><label class="flab" title="各 rank 设备（如 0,1）">--devices</label><input class="inp grow" id="n_devices" placeholder="0,1"></div>
+            <div class="fcell"><label class="flab" title="单请求最大内存（MiB）">--max-request-mib</label><input class="inp grow" id="n_reqmib" type="number"></div>
+            <div class="fcell"><label class="flab" title="最大 pending 请求数">--max-pending-requests</label><input class="inp grow" id="n_pendreq" type="number"></div>
+            <div class="fcell"><label class="flab" title="pending 超时（毫秒）">--pending-timeout-ms</label><input class="inp grow" id="n_ptimeout" type="number"></div>
+          </div>
+          <div class="frow chkrow">
+            <label class="chk" title="禁用 CUDA Graph（eager 解码）"><input type="checkbox" id="n_nocudagraph"> --no-cuda-graph</label>
+            <label class="chk" title="启用 CORS"><input type="checkbox" id="n_cors"> --cors</label>
+          </div>
+        </div>
+        <div class="fgroup">
+          <h3>其他参数</h3>
+          <textarea class="ta" id="n_custom" rows="3" spellcheck="false" placeholder="未列出的参数，原样追加（如 --request-log-jsonl /path --log-stats-interval-ms 5000）"></textarea>
+        </div>
+        </div>
+        <div class="fhint" id="n_issues"></div>
+        <div class="cmd-bar">
+          <span class="cmd-bar-label">命令预览</span>
+          <button class="btn sm" id="btn_n_copy" title="复制完整启动命令">复制</button>
+        </div>
+        <div class="cmd" id="n_preview"></div>
+        <div class="fhint" id="n_current_wrap" style="display:none">当前生效（运行进程）：<span class="ok" id="n_current"></span></div>
+        <div class="btnrow">
+          <button class="btn primary" id="btn_n_save">保存</button>
+          <button class="btn primary" id="btn_n_save_restart">保存并重启</button>
+        </div>
+        <div class="msg" id="n_msg"></div>
+      </section>
       </div>
       <div id="cmd_edit_area">
       <section class="section">
@@ -515,6 +631,134 @@ const TXT_IDS = [["f_alias","--alias"],["f_ts","--tensor-split"],
                  ["f_fit_target","--fit-target"],
                  ["f_api_key","--api-key"]];
 
+// ============ NInfer launcher 表单 ============
+// 字段 id → flag；后端 key = flag 去掉 -- 并把 - 换成 _
+const N_NUM = [
+  ["n_port","--port"],["n_concurrency","--max-concurrency"],
+  ["n_context","--max-context"],["n_kvcap","--kv-capacity"],
+  ["n_chunk","--prefill-chunk"],["n_hostcache","--context-host-cache-mib"],
+  ["n_defmax","--default-max-tokens"],["n_dmax","--draft-tokens"],["n_vmax","--vision-max-tokens"],
+  ["n_temp","--temperature"],["n_topp","--top-p"],["n_topk","--top-k"],["n_minp","--min-p"],
+  ["n_pp","--presence-penalty"],["n_fp","--frequency-penalty"],["n_seed","--seed"],
+  ["n_ptimeout","--pending-timeout-ms"],["n_pendreq","--max-pending-requests"],
+  ["n_yarnfactor","--yarn-factor"],["n_yarnorigin","--yarn-origin"]
+];
+const N_SEL = [
+  ["n_kvdtype","--kv-dtype"],["n_spec","--spec"],["n_rope","--rope"],["n_tp","--tp"]
+];
+const N_TXT = [
+  ["n_host","--host"],["n_devices","--devices"],["n_apikey","--api-key"],
+  ["n_modelid","--model-id"],["n_reqmib","--max-request-mib"]
+];
+const N_CHK = [
+  ["n_vision","--vision"],["n_lmhead","--lm-head-draft"],["n_noprefix","--no-prefix-reuse"],
+  ["n_nocudagraph","--no-cuda-graph"],["n_nothinking","--no-thinking"],
+  ["n_preserve","--preserve-thinking"],["n_greedy","--greedy"],["n_cors","--cors"]
+];
+const N_KEY = flag => flag.slice(2).replace(/-/g, "_");
+
+function ninferFields() {
+  const f = {};
+  for (const [id, flag] of N_NUM.concat(N_SEL).concat(N_TXT)) f[N_KEY(flag)] = $(id).value.trim();
+  for (const [id, flag] of N_CHK) f[N_KEY(flag)] = $(id).checked;
+  f.model = $("n_model").value.trim();
+  f.custom = $("n_custom").value.trim();
+  return f;
+}
+function fillNinfer(p) {
+  for (const [id, flag] of N_NUM.concat(N_SEL).concat(N_TXT)) $(id).value = p[N_KEY(flag)] || "";
+  for (const [id, flag] of N_CHK) $(id).checked = !!p[N_KEY(flag)];
+  $("n_model").value = p.model || "";
+  $("n_custom").value = p.custom || "";
+  updateNinferUI();
+}
+function ninferCmdPreview() {
+  const f = ninferFields();
+  const out = [];
+  for (const [id, flag] of N_NUM.concat(N_SEL).concat(N_TXT)) {
+    const v = f[N_KEY(flag)];
+    if (v !== "") out.push(flag, String(v));
+  }
+  for (const [id, flag] of N_CHK) if (f[N_KEY(flag)]) out.push(flag);
+  out.push(...f.custom.split(" ").filter(Boolean));
+  return out;
+}
+function updateNinferPreview() {
+  const el = $("n_preview");
+  if (!el) return;
+  const model = ninferFields().model || "（未选模型）";
+  el.textContent = [model].concat(ninferCmdPreview()).join(" ");
+}
+function updateNinferUI() {
+  // 投机解码：--spec 下拉框始终可选；draft-tokens 随 spec 启停与限幅，--lm-head-draft 仅 mtp
+  const spec = $("n_spec").value, hint = $("n_spec_hint"), dmax = $("n_dmax"), lm = $("n_lmhead");
+  dmax.disabled = !spec;
+  lm.disabled = spec !== "mtp";
+  lm.title = spec === "mtp" ? "草稿复用 lm-head（配合 MTP）" : "仅 --spec mtp 时可用";
+  if (spec === "mtp") {
+    dmax.min = 1; dmax.max = 5;
+    hint.textContent = "MTP 使用主模型内置头，--draft-tokens 取 1..5；--lm-head-draft 复用 lm-head";
+  } else if (spec === "dflash") {
+    dmax.min = 1; dmax.max = 15;
+    hint.textContent = "DFlash 需草稿模型，--draft-tokens 取 1..15；与 --vision、--tp 2、--rope yarn 互斥";
+  } else {
+    dmax.min = 1; dmax.max = "";
+    hint.textContent = "投机解码已禁用";
+  }
+  hint.className = "fhint" + (spec === "dflash" ? " warn" : "");
+  // rope：YaRN 参数仅 --rope yarn 时生效
+  const yarn = $("n_rope").value === "yarn";
+  ["n_yarnfactor", "n_yarnorigin"].forEach(id => { $(id).disabled = !yarn; });
+  // 视觉：--vision 关闭时 max-tokens 不生效
+  const vision = $("n_vision").checked, vmax = $("n_vmax");
+  vmax.disabled = !vision;
+  vmax.title = vision ? "视觉最大 token 预算（1..32768）" : "视觉未启用（--vision 关闭时不生效）";
+  // 跨字段校验（与后端 ninfer_save 一致）
+  const num = v => (v === "" ? null : Number(v));
+  const dt = num(dmax.value), vmt = num(vmax.value), tp = $("n_tp").value;
+  const issues = [];
+  if (spec === "mtp" && (dt === null || dt < 1 || dt > 5)) issues.push("mtp 需要 --draft-tokens 1..5");
+  if (spec === "dflash") {
+    if (dt === null || dt < 1 || dt > 15) issues.push("dflash 需要 --draft-tokens 1..15");
+    if (vision) issues.push("dflash 与 --vision 互斥");
+    if (tp === "2") issues.push("dflash 与 --tp 2 互斥");
+    if (yarn) issues.push("dflash 与 --rope yarn 互斥");
+  }
+  if (yarn && vision) issues.push("--rope yarn 与 --vision 互斥");
+  if (tp === "2" && !$("n_devices").value.trim()) issues.push("--tp 2 需要 --devices（如 0,1）");
+  if (vision && vmt !== null && (vmt < 1 || vmt > 32768)) issues.push("--vision-max-tokens 需 1..32768");
+  const el = $("n_issues");
+  el.textContent = issues.length ? "⚠ " + issues.join("；") + "（保存将被拒绝）" : "";
+  el.className = issues.length ? "fhint warn" : "fhint";
+  updateNinferPreview();
+}
+async function saveNinfer(restart) {
+  const label = restart ? "保存并重启" : "保存";
+  if (restart && !confirm("保存后将重建 launcher 脚本并重启 ai-server，确定继续？")) return;
+  $("n_msg").textContent = label + "中…";
+  $("n_msg").className = "msg";
+  try {
+    const j = await api("/api/admin/ninfer", { fields: ninferFields(), restart });
+    if (!j.ok) { $("n_msg").textContent = j.error; $("n_msg").className = "msg bad"; return; }
+    $("n_msg").textContent = j.changed ? label + "成功" : "配置未变化";
+    $("n_msg").className = "msg ok";
+    loadCmd();
+    refreshService();
+  } catch (e) { $("n_msg").textContent = e.message; $("n_msg").className = "msg bad"; }
+}
+const N_INPUT_IDS = N_NUM.concat(N_SEL).concat(N_TXT).map(x => x[0])
+  .concat(N_CHK.map(x => x[0])).concat(["n_model", "n_custom"]);
+N_INPUT_IDS.forEach(id => $(id) && $(id).addEventListener("input", updateNinferUI));
+N_CHK.map(x => x[0]).forEach(id => $(id) && $(id).addEventListener("change", updateNinferUI));
+$("btn_n_save").onclick = () => saveNinfer(false);
+$("btn_n_save_restart").onclick = () => saveNinfer(true);
+$("btn_n_copy").onclick = () => {
+  const t = ninferCmdPreview().join(" ");
+  if (!t) { flashBtn($("btn_n_copy"), false); return; }
+  copyText(t).then(ok => flashBtn($("btn_n_copy"), ok));
+};
+// ============ NInfer 表单结束 ============
+
 // 仅当启用投机解码时才输出的草稿相关字段
 const SPEC_DRAFT_IDS = new Set(["f_draft", "f_dmax", "f_dngl", "f_dctk", "f_dctv"]);
 function buildCmd() {
@@ -770,14 +1014,24 @@ async function loadCmd() {
   if (!token) return;
   let j;
   try { j = await api("/api/admin/cmd"); } catch (e) { return; }
-  if (j.readonly) {
+  if (j.backend === "ninfer") {
     $("cmd_edit_area").style.display = "none";
-    $("cmd_readonly").style.display = "";
-    $("cmd_readonly_box").textContent = j.current || "—";
+    $("ninfer_area").style.display = "";
+    const nf = j.ninfer || {};
+    $("n_file_msg").textContent = "编辑 launcher：" + (nf.file || "（未找到脚本）") +
+      (nf.source === "process" ? "　·　字段值来自运行进程实际配置" : "");
+    const cur = j.current || "";
+    if (cur && !cur.startsWith("（")) {
+      $("n_current_wrap").style.display = "";
+      $("n_current").textContent = cur;
+    } else {
+      $("n_current_wrap").style.display = "none";
+    }
+    fillNinfer(nf.parsed || {});
     return;
   }
   $("cmd_edit_area").style.display = "";
-  $("cmd_readonly").style.display = "none";
+  $("ninfer_area").style.display = "none";
   await loadDevices();
   cmdBinary = (j.parsed && j.parsed.binary) || "";
   $("f_binary").value = cmdBinary;
@@ -943,9 +1197,6 @@ function fillFromRaw(cmd) {
   fillForm(p);
 }
 $("btn_cmd_revert").onclick = loadCmd;
-$("btn_readonly_copy").onclick = function () {
-  copyText($("cmd_readonly_box").textContent).then(ok => flashBtn($("btn_readonly_copy"), ok));
-};
 $("btn_cmd_save").onclick = () => saveCmd(false);
 $("btn_cmd_save_restart").onclick = () => saveCmd(true);
 $("btn_cmd_copy").onclick = () => {
@@ -964,6 +1215,7 @@ $("f_spec_engine").addEventListener("change", updatePreview);
 function clearFile(id) {
   $(id).value = "";
   updatePreview();
+  if (typeof updateNinferUI === "function" && id === "n_model") updateNinferUI();
 }
 
 let fmTarget = null;
@@ -1001,6 +1253,7 @@ async function loadDir(path) {
         $(fmTarget).value = j.path + "/" + f.name;
         $("file_modal").style.display = "none";
         updatePreview();
+        if (fmTarget === "n_model" && typeof updateNinferUI === "function") updateNinferUI();
       };
       list.appendChild(el);
     });

@@ -120,6 +120,8 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 .fcell.col { flex-direction: column; align-items: stretch; gap: 6px; }
 .fcell.col .flab { max-width: none; }
 .specchk { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.fgroup h3 .nvis { margin-left: 10px; }
+.inp:disabled { opacity: .45; cursor: not-allowed; }
 .fhint { font-size: 12px; color: var(--dim); margin-top: 8px; line-height: 1.5;
   padding: 6px 10px; border-radius: 6px;
   background: var(--bg); border: 1px solid var(--border);
@@ -225,6 +227,10 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 .logview::-webkit-scrollbar { width: 8px; }
 .logview::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .logview::-webkit-scrollbar-track { background: transparent; }
+.nscroll { max-height: calc(100vh - 240px); overflow-y: auto; padding-right: 6px; margin-top: 2px; }
+.nscroll::-webkit-scrollbar { width: 8px; }
+.nscroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.nscroll::-webkit-scrollbar-track { background: transparent; }
 
 /* 文件选择弹窗 */
 .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); z-index: 100;

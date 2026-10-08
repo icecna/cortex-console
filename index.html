@@ -29,13 +29,13 @@
 <!-- ===== 主指标栏 ===== -->
 <section class="kpis">
   <div class="kpi">
-    <div class="kpi-label">填充速度</div>
+    <div class="kpi-label" id="k_pf_label">填充速度</div>
     <div class="kpi-value" id="k_pf">—<span class="u">t/s</span></div>
     <div class="kpi-sub" id="k_pf_sub"></div>
     <canvas class="kpi-spark" id="k_pf_c"></canvas>
   </div>
   <div class="kpi">
-    <div class="kpi-label">生成速度</div>
+    <div class="kpi-label" id="k_gen_label">生成速度</div>
     <div class="kpi-value" id="k_gen">—<span class="u">t/s</span></div>
     <div class="kpi-sub" id="k_gen_sub"></div>
     <canvas class="kpi-spark" id="k_gen_c"></canvas>
@@ -255,33 +255,44 @@ function render(d) {
   const live = LG && LG.gen_live;
   const pf = LG && LG.prefill_live;
   const genWin = BE === "ninfer" ? 2 : 15;
-  const gpuBusy = g.some(x => x.util != null && x.util >= 20);
   const gpuAllZero = g.length > 0 && g.every(x => x.util === 0);
-  // GPU 全部为 0 时立刻判空闲，不等 genWin 窗口
+  // GPU 全部为 0 时立刻判空闲；「刚结束」只保留时间窗口，
+  // 不能以 GPU 忙为条件：prefill 期间 GPU 打满但 decode gauge 为 0，会一直残留旧速度
   const lastGen = LG && LG.gen && LG.gen.ts != null
-    && (gpuBusy || (!gpuAllZero && (d.t - LG.gen.ts) <= genWin));
+    && (!gpuAllZero && (d.t - LG.gen.ts) <= genWin);
   // 填充速度：ninfer 取 /metrics gauge 实时值；llama 无实时速度，取最近结束请求的 prompt eval 均值
   const pfDone = LG && LG.prompt && LG.prompt.ts != null && (d.t - LG.prompt.ts) <= 15;
   if (pf && pf.ts != null && (d.t - pf.ts) <= 10 && !gpuAllZero) {
+    // ninfer /metrics gauge 实时：「实时」移到标题，与生成速度对称
+    $("k_pf_label").textContent = "填充速度 · 实时";
     $("k_pf").innerHTML = '<span class="num">' + fmt(pf.tps, 1) + '</span><span class="u">t/s</span>';
-    $("k_pf_sub").textContent = "实时" + (pf.waiting ? " · 排队 " + pf.waiting : "");
-  } else if (pfDone) {
-    $("k_pf").innerHTML = '<span class="num dim">' + fmt(LG.prompt.tps, 1) + '</span><span class="u">t/s</span>';
-    $("k_pf_sub").textContent = "最近请求 · " + fmt(LG.prompt.tokens) + " tokens";
+    $("k_pf_sub").textContent = pf.waiting ? "排队 " + pf.waiting : "";
   } else {
-    $("k_pf").innerHTML = '<span class="num dim">空闲</span>';
-    $("k_pf_sub").textContent = "";
+    $("k_pf_label").textContent = "填充速度";
+    if (pfDone) {
+      $("k_pf").innerHTML = '<span class="num dim">' + fmt(LG.prompt.tps, 1) + '</span><span class="u">t/s</span>';
+      $("k_pf_sub").textContent = "最近请求 · " + fmt(LG.prompt.tokens) + " tokens";
+    } else {
+      $("k_pf").innerHTML = '<span class="num dim">空闲</span>';
+      $("k_pf_sub").textContent = "";
+    }
   }
   if (live && !gpuAllZero) {
+    // ninfer /metrics gauge 实时：「实时」移到标题，副标题不再重复大字数字
+    const rt = BE === "ninfer" && live.n_gen == null;
+    $("k_gen_label").textContent = rt ? "生成速度 · 实时" : "生成速度";
     $("k_gen").innerHTML = '<span class="num">' + fmt(live.tg, 1) + '</span><span class="u">t/s</span>';
-    // n_gen 为 null 说明来自 /metrics gauge（实时）；有值则来自 done 行兜底（整请求值）
-    $("k_gen_sub").textContent = (BE === "ninfer" && live.n_gen != null ? "刚结束 " : (BE === "ninfer" ? "实时 " : "3s ")) + fmt(live.tg_3s, 1) + " t/s" + (cumStr ? " · " + cumStr : "");
-  } else if (lastGen) {
-    $("k_gen").innerHTML = '<span class="num dim">' + fmt(LG.gen.tps, 1) + '</span><span class="u">t/s</span>';
-    $("k_gen_sub").textContent = "刚结束" + (cumStr ? " · " + cumStr : "");
+    const head = rt ? "" : (BE === "ninfer" ? "刚结束" : "3s " + fmt(live.tg_3s, 1) + " t/s");
+    $("k_gen_sub").textContent = [head, cumStr].filter(Boolean).join(" · ");
   } else {
-    $("k_gen").innerHTML = '<span class="num dim">空闲</span>';
-    $("k_gen_sub").textContent = cumStr;
+    $("k_gen_label").textContent = "生成速度";
+    if (lastGen) {
+      $("k_gen").innerHTML = '<span class="num dim">' + fmt(LG.gen.tps, 1) + '</span><span class="u">t/s</span>';
+      $("k_gen_sub").textContent = "刚结束" + (cumStr ? " · " + cumStr : "");
+    } else {
+      $("k_gen").innerHTML = '<span class="num dim">空闲</span>';
+      $("k_gen_sub").textContent = cumStr;
+    }
   }
   const utils = g.map(x => x.util).filter(v => v != null);
   const gpuAvg = utils.length ? utils.reduce((a, b) => a + b, 0) / utils.length : null;
