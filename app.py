@@ -469,8 +469,9 @@ def llama_proc():
     try:
         with open("/proc/%d/cmdline" % pid, "rb") as f:
             cmdline = f.read().replace(b"\0", b" ").decode().strip()
-        # 脱敏：/api/status 无鉴权，不能把 --api-key 等凭据泄露给任意访问者
-        cmdline = re.sub(r"(--[\w-]*[ak]ey[\w-]*\s+)\S+", r"\1****", cmdline) if cmdline else None
+        # 脱敏：/api/status 无鉴权，不能把 --api-key 等凭据泄露给任意访问者。
+        # 同时覆盖 "--api-key value" 与 "--api-key=value" 两种写法（cmdline 以空格拼合）
+        cmdline = re.sub(r"(--[\w-]*[ak]ey[\w-]*)(=\S+|\s+\S+)", r"\1****", cmdline) if cmdline else None
     except Exception:
         pass
     return {
@@ -742,8 +743,13 @@ def _ninfer_counters():
     # 实时速度直接读服务端 gauge（5s 窗口平滑，空闲回零），不再用 counter 差值
     gen_tps = s.get("decode_tokens_per_second") or None
     prompt_tps = s.get("prefill_tokens_per_second") or None
-    if gen_tps and dt > 0:
-        acc[1] += dt  # 只计实际 decode 时间，空闲不算（与 llama 的 decode-only 均值口径一致）
+    if dt > 0:
+        # 门控用 counter 增量而非 gauge：gauge 由服务端 5s 窗口刷新，
+        # decode 停止后最长 ~10s 才回零（stale）；decode_tokens_total 每个 decode
+        # 轮次递增，只有它在区间内真正涨了才算有 decode
+        dec_delta = s.get("decode_tokens_total", 0) - prev[1].get("decode_tokens_total", 0)
+        if dec_delta > 0:
+            acc[1] += dt  # 只计实际 decode 时间，空闲不算（与 llama 的 decode-only 均值口径一致）
     d = s.get("spec_decode_draft_tokens_total", 0)
     a = s.get("spec_decode_accepted_tokens_total", 0)
     # 实时接受率：ninfer 的 spec_decode_*_total 只在请求结束时更新，逐秒差值恒为 0，
@@ -1107,7 +1113,7 @@ def sampler():
                 _latest["t"] = t0
             time.sleep(max(0.1, POLL_LLAMA - (time.time() - t0)))
         except Exception as ex:
-            # 顶层兑底：任何未预期异常（如 metrics 解析 bug）不能杀死采样线程，
+            # 顶层兜底：任何未预期异常（如 metrics 解析 bug）不能杀死采样线程，
             # 否则 dashboard 永久冻结在最后一帧且无告警
             print("sampler error:", ex, flush=True)
             time.sleep(2)
@@ -1922,6 +1928,9 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length", 0))
         except Exception:
             n = 0
+        if n < 0:  # 负值会让 read(n) 读到 EOF 阻塞到超时，直接拒绝
+            self._json(400, {"error": "请求格式错误"})
+            return
         if n > 1048576:  # 业务 body 都很小，设上限防内存打爆
             self._json(413, {"error": "请求体过大"})
             return
