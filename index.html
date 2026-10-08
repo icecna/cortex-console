@@ -81,6 +81,7 @@
         <div class="def"><span class="k">请求 (处理/排队)</span><span class="v" id="gen_req">—</span></div>
         <div class="def"><span class="k">进程 CPU</span><span class="v" id="svc_cpu">—</span></div>
         <div class="def"><span class="k">进程内存</span><span class="v" id="svc_rss">—</span></div>
+        <div class="def"><span class="k">Host KV 缓存</span><span class="v" id="svc_hostmem">—</span></div>
         <div class="def"><span class="k">运行时间</span><span class="v" id="svc_up">—</span></div>
       </div>
       <div class="subhead">生成统计 <span class="sub" id="stat_scope"></span></div>
@@ -313,6 +314,20 @@ function render(d) {
   const pr = L.proc || {};
   $("svc_cpu").textContent = pr.cpu_pct != null ? fmt(pr.cpu_pct, 1) + "%" : "—";
   $("svc_rss").textContent = pr.rss_gb != null ? fmt(pr.rss_gb, 2) + " GB" : "—";
+  // Host KV 缓存（ninfer 特有，--context-host-cache-mib 容量）；llama 无此指标，隐藏
+  const hm = (M && M.host_mem) || null;
+  const hostmemRow = document.getElementById("svc_hostmem").parentElement;
+  if (hm && hm.capacity > 0) {
+    hostmemRow.style.display = "";
+    const pct = fmt(100 * hm.used / hm.capacity, 0);
+    $("svc_hostmem").textContent =
+      fmt(hm.used / 1073741824, 1) + " / " + fmt(hm.capacity / 1073741824, 1) +
+      " GB · " + pct + "%";
+    $("svc_hostmem").title = "峰值 " + fmt(hm.peak / 1073741824, 1) + " GB · " + hm.entries + " 条";
+  } else {
+    hostmemRow.style.display = "none";
+    $("svc_hostmem").textContent = "—";
+  }
   $("svc_up").textContent = fmtDur(pr.uptime_s);
   $("svc_cmd").textContent = pr.cmdline || "—";
 

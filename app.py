@@ -793,6 +793,13 @@ def _ninfer_counters():
         "accept": (100.0 * a / d) if d else None,
         "accept_inst": accept_inst,
         "draft_tokens": d, "accepted": a,
+        # 主机 KV 缓存（--context-host-cache-mib 容量）：前端展示占用
+        "host_mem": {
+            "used": s.get("host_context_used_bytes", 0),
+            "capacity": s.get("host_context_capacity_bytes", 0),
+            "peak": s.get("host_context_peak_bytes", 0),
+            "entries": s.get("host_context_entries", 0),
+        },
     }
     _ninfer_cnt_cache = (res, time.monotonic())
     return res
@@ -928,6 +935,7 @@ def ninfer_metrics():
                       "deferred": (tput["waiting"]
                                    if tput and tput["ts"] is not None
                                    and 0 <= time.time() - tput["ts"] <= 15 else 0)},
+        "host_mem": c["host_mem"],
     }
 
 _ninfer_props_cache, _ninfer_props_ts = None, 0.0
