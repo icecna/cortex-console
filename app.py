@@ -706,7 +706,7 @@ _ninfer_stats = None  # (data, ts, unit)
 _ninfer_mprev = None  # (monotonic, counters) 上一窗口，用于实际间隔累计
 _ninfer_mtp = []     # [(monotonic, draft_tokens, accepted_tokens)] 近 15s 采样，实时接受率窗口
 _ninfer_mtp_hold = None  # decode 进行中且窗口内无完成事件时，保持上一次接受率
-_ninfer_boot = None    # (monotonic, counters) 基准点，用于平均速度
+_ninfer_boot = None    # (pid, monotonic, counters) 基准点，用于平均速度（pid 变即重置）
 _ninfer_acc = None     # [基准 decode counter, decode 秒数] 平均速度只累计实际在 decode 的时间
 _ninfer_cnt_cache = None  # (data, monotonic) 0.4s 缓存：sampler 快路径里 metrics 与 log_speeds
                           # 都会调用，共享同一份差值（否则第二次 dt<0.15 被防抖丢成 None）
@@ -715,7 +715,7 @@ def _ninfer_counters():
     """ninfer-serve /metrics（Prometheus 格式，无前缀 counter）。
     返回服务启动以来累计量（tokens/MTP）、实时速度（直接读 decode/prefill_tokens_per_second
     gauge，服务端 5s 窗口平滑、空闲回零）、dashboard 启动以来 decode 均值（只计实际
-    decode 时间，服务重启 counter 归零时自动重置基准）。服务未响应返回 None。"""
+    decode 时间，服务重启 pid 变化时自动重置基准）。服务未响应返回 None。"""
     global _ninfer_mprev, _ninfer_boot, _ninfer_cnt_cache, _ninfer_acc, _ninfer_mtp, _ninfer_mtp_hold
     c = _ninfer_cnt_cache
     if c is not None and time.monotonic() - c[1] < 0.4:
@@ -730,11 +730,15 @@ def _ninfer_counters():
     dt = (now - prev[0]) if prev is not None else 0.0
     _ninfer_mprev = (now, s)
     b = _ninfer_boot
-    if b is None or b[1].get("decode_tokens_total", 0) > s.get("decode_tokens_total", 0):
-        b = _ninfer_boot = (now, s)  # 首次基准 / 服务重启 counter 倒退
+    # 重启判据以 pid 变化为准（counter 倒退只在倒退得更多时成立：重启后新累计值
+    # 超过旧基准时倒退检测失效，基准和窗口都不会重置）
+    _, pid, _ = detect_service()
+    restarted = b is not None and (b[0] != pid
+            or b[2].get("decode_tokens_total", 0) > s.get("decode_tokens_total", 0))
+    if b is None or restarted:
+        b = _ninfer_boot = (pid, now, s)  # 首次基准 / 服务重启
         _ninfer_acc = [s.get("decode_tokens_total", 0), 0.0]
     acc = _ninfer_acc
-    accept_inst = None
     # 实时速度直接读服务端 gauge（5s 窗口平滑，空闲回零），不再用 counter 差值
     gen_tps = s.get("decode_tokens_per_second") or None
     prompt_tps = s.get("prefill_tokens_per_second") or None
@@ -743,10 +747,10 @@ def _ninfer_counters():
     d = s.get("spec_decode_draft_tokens_total", 0)
     a = s.get("spec_decode_accepted_tokens_total", 0)
     # 实时接受率：ninfer 的 spec_decode_*_total 只在请求结束时更新，逐秒差值恒为 0，
-    # 改用近 15s 窗口差值（跨请求边界）；服务重启 counter 倒退时清窗
+    # 改用近 15s 窗口差值（跨请求边界）；服务重启（pid 变或 counter 倒退）时清窗
     d_cur = d
     a_cur = a
-    if _ninfer_mtp and d_cur < _ninfer_mtp[-1][1]:
+    if _ninfer_mtp and (restarted or d_cur < _ninfer_mtp[-1][1]):
         _ninfer_mtp.clear()
         _ninfer_mtp_hold = None
     _ninfer_mtp.append((now, d_cur, a_cur))
@@ -763,7 +767,11 @@ def _ninfer_counters():
     elif gen_tps:
         # 长请求中途窗口内无完成事件：沿用上一次值（接受率由模型/配置决定，基本稳定）；
         # dashboard 刚启动冷启动时用累计值兜底
-        accept_inst = _ninfer_mtp_hold or ((100.0 * a / d) if d else None)
+        # 显式 is not None：hold 恰为 0（草稿全被拒）时不能被 or 覆盖成累计值
+        if _ninfer_mtp_hold is not None:
+            accept_inst = _ninfer_mtp_hold
+        elif d:
+            accept_inst = 100.0 * a / d
     avg = pred_sec = None
     delta = s.get("decode_tokens_total", 0) - acc[0]
     if acc[1] >= 30 and delta > 0:  # decode 样本太小时均值无意义
@@ -1076,26 +1084,33 @@ _last_hw = 0.0
 def sampler():
     """llama metrics 每 0.5s 采一次（速度更跟手），硬件每 2s 采一次。"""
     global _latest, _last_hw
+    try:
+        llama_metrics()  # 预热差值（在循环前完成，避免与 main 预热/其他线程并发）
+    except Exception as ex:
+        print("sampler warmup error:", ex, flush=True)
     while True:
-        t0 = time.time()
-        m = llama_metrics()
-        if _latest is None or t0 - _last_hw >= POLL:
-            try:
+        try:
+            t0 = time.time()
+            m = llama_metrics()
+            if _latest is None or t0 - _last_hw >= POLL:
                 _latest = snapshot(m)
-            except Exception as ex:
-                print("snapshot error:", ex, flush=True)
-            _last_hw = t0
-        elif _latest is not None:
-            # 约定：快路径只替换已有 key 的值，不增删 key。
-            # GIL 下 dict 单 key 赋值是原子的，HTTP 线程并发 json.dumps 安全；
-            # 若要给 _latest 加新 key，必须改为整体替换快照。
-            # up 仅 llama 后端由 /metrics 可达性决定；ninfer 的 up 语义是“进程在”
-            # （模型加载中也算加载中），不能每 0.5s 被 metrics 未就绪刷成 False
-            if _latest["llama"]["backend"] == "llama":
-                _latest["llama"]["up"] = m is not None
-            _latest["llama"]["metrics"] = m
-            _latest["t"] = t0
-        time.sleep(max(0.1, POLL_LLAMA - (time.time() - t0)))
+                _last_hw = t0
+            elif _latest is not None:
+                # 约定：快路径只替换已有 key 的值，不增删 key。
+                # GIL 下 dict 单 key 赋值是原子的，HTTP 线程并发 json.dumps 安全；
+                # 若要给 _latest 加新 key，必须改为整体替换快照。
+                # up 仅 llama 后端由 /metrics 可达性决定；ninfer 的 up 语义是“进程在”
+                # （模型加载中也算加载中），不能每 0.5s 被 metrics 未就绪刷成 False
+                if _latest["llama"]["backend"] == "llama":
+                    _latest["llama"]["up"] = m is not None
+                _latest["llama"]["metrics"] = m
+                _latest["t"] = t0
+            time.sleep(max(0.1, POLL_LLAMA - (time.time() - t0)))
+        except Exception as ex:
+            # 顶层兑底：任何未预期异常（如 metrics 解析 bug）不能杀死采样线程，
+            # 否则 dashboard 永久冻结在最后一帧且无告警
+            print("sampler error:", ex, flush=True)
+            time.sleep(2)
 
 # ---------------- 管理（密码 + 服务控制 + 日志） ----------------
 
@@ -1959,8 +1974,8 @@ def main():
     threading.Thread(target=_cpu_temp_worker, daemon=True).start()
     threading.Thread(target=_pcie_worker, daemon=True).start()
     threading.Thread(target=sampler, daemon=True).start()
-    # 预热一次差值，让第一帧就有速率
-    cpu_usage(); llama_proc(); llama_metrics()
+    # 预热一次差值，让第一帧就有速率（llama_metrics 的预热移到 sampler 线程内，避免并发）
+    cpu_usage(); llama_proc()
     for port in PORTS:
         try:
             srv = ThreadingHTTPServer((HOST, port), Handler)
