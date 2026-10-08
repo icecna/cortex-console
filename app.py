@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""推理服务 + 硬件监控 Dashboard（纯标准库，无依赖）
+"""Cortex Console — 推理服务 + 硬件监控面板（纯标准库，无依赖）
 
 自动探测后端（llama-server / ninfer-serve），数据源：
   - llama-server: /metrics (吞吐、MTP 逐位置接受率) + /props (模型参数)
@@ -715,7 +715,7 @@ _ninfer_cnt_cache = None  # (data, monotonic) 0.4s 缓存：sampler 快路径里
 def _ninfer_counters():
     """ninfer-serve /metrics（Prometheus 格式，无前缀 counter）。
     返回服务启动以来累计量（tokens/MTP）、实时速度（直接读 decode/prefill_tokens_per_second
-    gauge，服务端 5s 窗口平滑、空闲回零）、dashboard 启动以来 decode 均值（只计实际
+    gauge，服务端 5s 窗口平滑、空闲回零）、cortex 启动以来 decode 均值（只计实际
     decode 时间，服务重启 pid 变化时自动重置基准）。服务未响应返回 None。"""
     global _ninfer_mprev, _ninfer_boot, _ninfer_cnt_cache, _ninfer_acc, _ninfer_mtp, _ninfer_mtp_hold
     c = _ninfer_cnt_cache
@@ -772,7 +772,7 @@ def _ninfer_counters():
         _ninfer_mtp_hold = accept_inst
     elif gen_tps:
         # 长请求中途窗口内无完成事件：沿用上一次值（接受率由模型/配置决定，基本稳定）；
-        # dashboard 刚启动冷启动时用累计值兜底
+        # cortex-console 刚启动冷启动时用累计值兜底
         # 显式 is not None：hold 恰为 0（草稿全被拒）时不能被 or 覆盖成累计值
         if _ninfer_mtp_hold is not None:
             accept_inst = _ninfer_mtp_hold
@@ -1122,7 +1122,7 @@ def sampler():
             time.sleep(max(0.1, POLL_LLAMA - (time.time() - t0)))
         except Exception as ex:
             # 顶层兜底：任何未预期异常（如 metrics 解析 bug）不能杀死采样线程，
-            # 否则 dashboard 永久冻结在最后一帧且无告警
+            # 否则 cortex-console 永久冻结在最后一帧且无告警
             print("sampler error:", ex, flush=True)
             time.sleep(2)
 
@@ -2418,7 +2418,7 @@ def main():
         try:
             srv = ThreadingHTTPServer((HOST, port), Handler)
             threading.Thread(target=srv.serve_forever, daemon=True).start()
-            print("dashboard listening on http://%s:%d" % (HOST, port), flush=True)
+            print("cortex-console listening on http://%s:%d" % (HOST, port), flush=True)
         except OSError as ex:
             print("port %d unavailable: %s" % (port, ex), flush=True)
     while True:

@@ -1,5 +1,5 @@
 [Unit]
-Description=AI Server Dashboard (model server + hardware monitor)
+Description=Cortex Console (AI server console — model server + hardware monitor)
 After=network-online.target
 Wants=network-online.target
 

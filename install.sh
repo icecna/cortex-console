@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# install.sh — AI Server Dashboard + AI Server 安装/卸载
+# install.sh — Cortex Console + AI Server 安装/卸载
 #
 # 用法:
 #   sudo ./install.sh                          # 完整安装（默认路径）
-#   sudo ./install.sh --no-ai-server           # 只装 dashboard
+#   sudo ./install.sh --no-ai-server           # 只装 Cortex Console（监控面板）
 #   sudo ./install.sh --admin-password 'xxx'   # 指定初始管理员密码
 #   sudo ./install.sh --launcher quasar        # 指定初始默认后端
 #   sudo ./install.sh --uninstall              # 卸载（保留配置/日志）
@@ -11,7 +11,7 @@
 #   ./install.sh --help
 set -euo pipefail
 
-DASH_DIR=/mnt/models/dashboard
+DASH_DIR=/mnt/models/cortex-console
 LAUNCHERS_DIR=/mnt/models/ai-launchers
 INITIAL_LAUNCHER=""
 ADMIN_PW=""
@@ -67,7 +67,7 @@ fi
 # ---------- 卸载 ----------
 if [ "$UNINSTALL" = 1 ]; then
   [ "$EUID" = 0 ] || die "卸载需要 root: sudo $0 --uninstall"
-  for unit in dashboard ai-server; do
+  for unit in cortex-console ai-server; do
     [ "$NO_AI" = 1 ] && [ "$unit" = ai-server ] && continue
     f="/etc/systemd/system/${unit}.service"
     if [ -f "$f" ]; then
@@ -103,16 +103,16 @@ fi
 if command -v ss >/dev/null; then
   for p in 80 8090; do
     if ss -tln 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$"; then
-      warn "端口 $p 已被占用，dashboard 将跳过该端口"
+      warn "端口 $p 已被占用，Cortex Console 将跳过该端口"
     fi
   done
 fi
 
-# ---------- 部署 dashboard 代码 ----------
-echo "==> 部署 dashboard 到 $DASH_DIR"
+# ---------- 部署 cortex-console 代码 ----------
+echo "==> 部署 cortex-console 到 $DASH_DIR"
 mkdir -p "$DASH_DIR"
 for f in app.py index.html admin.html themes.html style.css themes.css \
-         README.md INSTALL.md dashboard.service.in ai-server.service.in; do
+         README.md INSTALL.md cortex-console.service.in ai-server.service.in; do
   src="$SRC_DIR/$f" dst="$DASH_DIR/$f"
   [ -f "$src" ] || continue
   if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
@@ -239,11 +239,11 @@ else
       fi
       rm -f "$tmp"
     }
-    install_unit dashboard.service.in dashboard 1
+    install_unit cortex-console.service.in cortex-console 1
     install_unit ai-server.service.in ai-server $([ "$NO_AI" = 1 ] && echo 0 || echo 1)
     systemctl daemon-reload
-    systemctl enable --now dashboard
-    note "dashboard.service 已启用并启动"
+    systemctl enable --now cortex-console
+    note "cortex-console.service 已启用并启动"
     if [ "$NO_AI" = 1 ]; then
       info "跳过 ai-server.service（--no-ai-server）"
     else
@@ -252,7 +252,7 @@ else
     fi
   else
     warn "未检测到 systemd，跳过 unit 安装。手动启动方式:"
-    echo "    cd $DASH_DIR && nohup python3 app.py > /var/log/dashboard.log 2>&1 &"
+    echo "    cd $DASH_DIR && nohup python3 app.py > /var/log/cortex-console.log 2>&1 &"
     [ "$NO_AI" = 1 ] || echo "    $LAUNCHERS_DIR/dispatch.sh &"
   fi
 fi
@@ -263,7 +263,7 @@ echo "安装完成"
 echo "  监控页:   http://<ip>:80  (或 :8090)"
 echo "  管理页:   http://<ip>:80/admin"
 if [ "$NO_AI" = 0 ]; then
-echo "  查看服务: systemctl status ai-server dashboard"
+echo "  查看服务: systemctl status ai-server cortex-console"
 echo "  切换后端: admin 页 → 服务控制 → 后端切换"
 fi
 if [ -f "$DASH_DIR/admin-password.txt" ]; then

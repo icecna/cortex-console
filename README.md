@@ -1,4 +1,4 @@
-# AI Server Dashboard
+# Cortex Console
 
 推理服务 + 硬件监控面板。纯 Python 标准库实现（无第三方依赖），单文件后端 `app.py` + 静态前端。
 
@@ -10,18 +10,18 @@
 ## 架构
 
 ```
-┌──────────────────────────┐     ┌─────────────────────────────────────────┐
-│  dashboard.service       │     │  ai-server.service                       │
-│  python3 app.py :80/8090 │     │  dispatch.sh                             │
-│                          │     │    └─ 读 /etc/ai-server.conf 的 LAUNCHER │
-│  只读监控 + 管理 API      │◄────┤    └─ exec /mnt/models/ai-launchers/     │
-│                          │     │         <launcher>.sh                    │
-└──────────────────────────┘     └─────────────────────────────────────────┘
+┌────────────────────────────┐     ┌─────────────────────────────────────────┐
+│  cortex-console.service    │     │  ai-server.service                       │
+│  python3 app.py :80/8090   │     │  dispatch.sh                             │
+│                            │     │    └─ 读 /etc/ai-server.conf 的 LAUNCHER │
+│  只读监控 + 管理 API        │◄────┤    └─ exec /mnt/models/ai-launchers/     │
+│                            │     │         <launcher>.sh                    │
+└────────────────────────────┘     └─────────────────────────────────────────┘
 ```
 
-- **dashboard** 不承载推理流量，只做监控/管理，挂了不影响推理服务
+- **cortex-console** 不承载推理流量，只做监控/管理，挂了不影响推理服务
 - **ai-server** 由 systemd 拉起，`Restart=on-failure` 兜底崩溃自愈
-- 两者解耦：切换后端 = 改一行配置 + 重启 ai-server，dashboard 无需重启
+- 两者解耦：切换后端 = 改一行配置 + 重启 ai-server，cortex-console 无需重启
 
 ## 后端切换
 
@@ -64,7 +64,7 @@ journalctl -u ai-server -f   # 看启动日志
    ```
    #   <name>   说明文字
    ```
-3. 完成——下拉框自动出现新选项，`dispatch.sh` 和 dashboard 代码零改动
+3. 完成——下拉框自动出现新选项，`dispatch.sh` 和 cortex-console 代码零改动
 
 ## API
 
@@ -98,14 +98,14 @@ journalctl -u ai-server -f   # 看启动日志
 ## 运维
 
 ```bash
-systemctl status ai-server dashboard
+systemctl status ai-server cortex-console
 journalctl -u ai-server -f          # 推理服务日志
-journalctl -u dashboard -f          # dashboard 日志
+journalctl -u cortex-console -f   # cortex-console 日志
 ```
 
 - 管理员账号存 `admin.json`（git 忽略），密码 scrypt 加盐
 - 启动参数历史存 `cmd_history.json`（git 忽略）
-- 修改 `app.py` 后需 `systemctl restart dashboard`；前端/CSS 改动刷新页面即可
+- 修改 `app.py` 后需 `systemctl restart cortex-console`；前端/CSS 改动刷新页面即可
 
 ## 文件
 

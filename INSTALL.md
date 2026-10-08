@@ -1,15 +1,15 @@
 # 安装说明
 
-`install.sh` 部署 AI Server Dashboard（监控面板）+ AI Server（推理服务管理器）。
+`install.sh` 部署 Cortex Console（监控面板）+ AI Server（推理服务管理器）。
 纯 bash + python3 标准库，无第三方依赖，幂等可重复执行。
 
 ## 快速开始
 
 ```bash
-# 完整安装（dashboard + ai-server），使用默认路径
+# 完整安装（cortex-console + ai-server），使用默认路径
 sudo ./install.sh
 
-# 只装 dashboard（推理服务已存在的机器）
+# 只装 Cortex Console（推理服务已存在的机器）
 sudo ./install.sh --no-ai-server
 
 # 指定初始管理员密码
@@ -18,7 +18,7 @@ sudo ./install.sh --admin-password 'MyStr0ngPass!'
 # 指定初始默认后端
 sudo ./install.sh --launcher quasar
 
-# 自定义安装目录（默认 /mnt/models/dashboard 和 /mnt/models/ai-launchers）
+# 自定义安装目录（默认 /mnt/models/cortex-console 和 /mnt/models/ai-launchers）
 sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 ```
 
@@ -26,7 +26,7 @@ sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--dash-dir <path>` | `/mnt/models/dashboard` | dashboard 代码目录 |
+| `--dash-dir <path>` | `cortex-console 代码目录| cortex-console 代码目录 |
 | `--launchers-dir <path>` | `/mnt/models/ai-launchers` | launcher 脚本目录 |
 | `--launcher <name>` | 取现有 conf / 首个脚本 | 初始默认后端（仅首次生成 conf 时生效） |
 | `--admin-password <pw>` | 随机生成 | 初始管理员密码（仅 `admin.json` 不存在时生效） |
@@ -40,8 +40,8 @@ sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 
 | 组件 | 目标 | 已存在时 |
 |---|---|---|
-| dashboard 代码（`app.py` + 前端） | `$DASH_DIR` | 内容相同跳过，不同则覆盖 |
-| `dashboard.service` | `/etc/systemd/system/` | 不覆盖，diff 提示 |
+| cortex-console 代码（`app.py` + 前端） | `$DASH_DIR` | 内容相同跳过，不同则覆盖 |
+| `cortex-console.service` | `/etc/systemd/system/` | 不覆盖，diff 提示 |
 | launcher 脚本 + `dispatch.sh` | `$LAUNCHERS_DIR` | 同上 |
 | `ai-server.service` | `/etc/systemd/system/` | 不覆盖，diff 提示 |
 | `/etc/ai-server.conf` | 同路径 | **绝不覆盖**（`--force-conf` 除外） |
@@ -62,7 +62,7 @@ sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 | python3 | ≥ 3.8（仅标准库） | 报错退出 |
 | systemd | 可选 | **降级**：代码照常部署，跳过 unit 安装，打印 `nohup python3 app.py &` 手动启动指引 |
 | root 权限 | 写 `/etc` 必需 | 提示 `sudo` 后退出 |
-| 端口 80/8090 | 可选 | 被占用时警告（dashboard 运行时自动跳过占用端口） |
+| 端口 80/8090 | 可选 | 被占用时警告（cortex-console 运行时自动跳过占用端口） |
 
 - 全程 `set -euo pipefail`，任一步失败立即退出并打印已完成步骤清单
 - 自动 `mkdir -p` 缺失目录；launcher 脚本安装后做 `bash -n` 语法校验
@@ -72,7 +72,7 @@ sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 ## 验证
 
 ```bash
-systemctl status dashboard ai-server     # 均 active
+systemctl status cortex-console ai-server     # 均 active
 curl -s http://127.0.0.1:8090/api/status # 200 + JSON
 # 浏览器打开 http://<ip>:80/admin 登录
 journalctl -u ai-server -f               # 推理服务启动日志
