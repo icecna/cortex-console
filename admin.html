@@ -45,6 +45,15 @@
       </div>
       <div class="tabpanel" id="tab_svc">
       <section class="section">
+        <h2><span class="sico">🔀</span>后端切换</h2>
+        <div class="frow">
+          <select class="inp grow sel" id="launcher_sel"></select>
+          <button class="btn primary" id="btn_launcher">切换并重启</button>
+        </div>
+        <div class="fhint" id="launcher_desc"></div>
+        <div class="msg" id="launcher_msg"></div>
+      </section>
+      <section class="section">
         <h2><span class="sico">🛠️</span>服务控制</h2>
         <div class="defs">
           <div class="def"><span class="k">状态</span><span class="v big" id="svc_state">—</span></div>
@@ -582,6 +591,72 @@ async function doAction(action, label) {
 $("btn_start").onclick = () => doAction("start", "启动");
 $("btn_restart").onclick = () => doAction("restart", "重启");
 $("btn_stop").onclick = () => doAction("stop", "停止");
+
+/* ---------- 后端切换 ---------- */
+let launcherCur = "";
+let launcherBusy = false;
+async function refreshLauncher() {
+  if (!token) return;
+  try {
+    const j = await api("/api/admin/launcher");
+    launcherCur = j.current || "";
+    const sel = $("launcher_sel");
+    sel.innerHTML = "";
+    for (const o of j.options) {
+      const op = document.createElement("option");
+      op.value = o.name;
+      op.textContent = o.name + (o.current ? "（当前）" : "");
+      sel.appendChild(op);
+    }
+    sel.value = launcherCur;
+    const cur = j.options.find(o => o.current);
+    $("launcher_desc").textContent = cur ? cur.desc : (launcherCur ? "" : "（未设置 LAUNCHER）");
+  } catch (e) {}
+}
+$("btn_launcher").onclick = async () => {
+  const name = $("launcher_sel").value;
+  if (!name || launcherBusy) return;
+  const msg = $("launcher_msg");
+  if (name === launcherCur) { msg.textContent = "已是当前后端，无需切换"; msg.className = "msg"; return; }
+  if (!confirm("切换到后端 " + name + " 并重启服务？\n切换期间服务中断（约 1-2 分钟）。")) return;
+  launcherBusy = true;
+  for (const id of ["btn_start", "btn_restart", "btn_stop"]) $(id).disabled = true;  // 切换期间禁止手动启停，避免打断加载
+  msg.textContent = "正在切换到 " + name + "…";
+  msg.className = "msg";
+  try {
+    const j = await api("/api/admin/launcher", { launcher: name });
+    if (!j.ok) { msg.textContent = j.error || "切换失败"; msg.className = "msg bad"; return; }
+    launcherCur = name;
+    msg.textContent = "已切换，等待服务启动…";
+    msg.className = "msg ok";
+    refreshLauncher();
+    loadCmd();  // 后端变了，启动参数表单重新拉取（此时服务未起，读的是新 launcher 脚本）
+    let ready = false;
+    for (let i = 0; i < 36; i++) {          // 最多轮询 3 分钟，等模型加载完
+      await new Promise(r => setTimeout(r, 5000));
+      refreshService();
+      try {
+        const s = await api("/api/admin/service");
+        if (s.active === "active") { ready = true; break; }
+      } catch (e) {}
+    }
+    if (ready) {
+      msg.textContent = "后端 " + name + " 已就绪";
+      msg.className = "msg ok";
+    } else {
+      msg.textContent = "切换完成，但 3 分钟内服务未就绪，请检查服务状态或日志";
+      msg.className = "msg bad";
+    }
+    refreshLauncher();
+    loadCmd();  // 服务就绪后再用进程实际参数刷新一次
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.className = "msg bad";
+  } finally {
+    launcherBusy = false;
+    for (const id of ["btn_start", "btn_restart", "btn_stop"]) $(id).disabled = false;
+  };
+};
 
 /* ---------- 服务健康 ---------- */
 function fmtUptime(s) {
@@ -1396,7 +1471,7 @@ setInterval(refreshErrors, 15000);
 
 /* ---------- 初始化 ---------- */
 if (token) {
-  api("/api/admin/service").then(showMain).catch(showLogin);
+  api("/api/admin/service").then(() => { showMain(); refreshLauncher(); }).catch(showLogin);
 } else {
   showLogin();
 }

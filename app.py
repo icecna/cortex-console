@@ -1213,6 +1213,85 @@ def service_action(action):
             "error": r.stderr.strip() or None,
             "state": info}
 
+AI_SERVER_CONF = "/etc/ai-server.conf"
+AI_LAUNCHERS_DIR = "/mnt/models/ai-launchers"
+_launcher_lock = threading.Lock()  # 防止并发切换时读-改-写交叉
+
+def launcher_info():
+    """解析 conf 中当前 LAUNCHER，并扫描 launcher 脚本目录枚举可选后端。
+
+    说明文字来自 conf 顶部的注释行（格式：#   <name>   <描述>）。
+    当前值取第一个未注释行，与 dispatch.sh（head -1）语义一致。
+    """
+    cur = ""
+    descs = {}
+    try:
+        with open(AI_SERVER_CONF) as f:
+            for line in f:
+                m = re.match(r"^LAUNCHER\s*=\s*(\S+)", line)
+                if m:
+                    if not cur:  # 首行生效，后续未注释行忽略（与 dispatch.sh 一致）
+                        cur = m.group(1)
+                else:
+                    m = re.match(r"^#\s{2,}(\S+)\s+(.*)", line)
+                    if m and m.group(1) not in descs:
+                        descs[m.group(1)] = m.group(2).strip()
+    except OSError:
+        pass
+    options = []
+    try:
+        for fn in sorted(os.listdir(AI_LAUNCHERS_DIR)):
+            if fn.endswith(".sh") and fn != "dispatch.sh":
+                name = fn[:-3]
+                options.append({"name": name, "desc": descs.get(name, ""),
+                                "current": name == cur})
+    except OSError:
+        pass
+    return {"current": cur, "options": options}
+
+def launcher_switch(name):
+    """改写 conf 的 LAUNCHER 行（自动备份 .bak，原子替换），再重启 ai-server。"""
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", name):
+        return {"ok": False, "error": "非法 launcher 名: %s" % name}
+    target = os.path.join(AI_LAUNCHERS_DIR, name + ".sh")
+    if not (os.path.isfile(target) and os.access(target, os.X_OK)):
+        return {"ok": False, "error": "launcher 脚本不存在或不可执行: %s" % name}
+    with _launcher_lock:
+        try:
+            with open(AI_SERVER_CONF) as f:
+                lines = f.read().splitlines()
+        except OSError as e:
+            return {"ok": False, "error": "读取配置失败: %s" % e}
+        new_lines = []
+        matched = False
+        for line in lines:
+            m = re.match(r"^\s*#?\s*LAUNCHER\s*=\s*(\S+)", line)
+            if m:  # 只改 LAUNCHER 行：目标行去注释，其余行加注释，保持原文件风格
+                matched = True
+                new_lines.append(("LAUNCHER=%s" if m.group(1) == name else "#LAUNCHER=%s") % m.group(1))
+            else:
+                new_lines.append(line)
+        if not matched:  # conf 中没有任何 LAUNCHER 行（新增后端未登记）：追加到末尾
+            new_lines.append("LAUNCHER=%s" % name)
+        # 先备份，再写临时文件 + os.replace 原子替换，避免写一半崩溃损坏 conf
+        with open(AI_SERVER_CONF + ".bak", "w") as f:
+            f.write("\n".join(lines) + "\n")
+        tmp = AI_SERVER_CONF + ".tmp"
+        with open(tmp, "w") as f:
+            f.write("\n".join(new_lines) + "\n")
+        os.replace(tmp, AI_SERVER_CONF)
+    try:
+        r = subprocess.run(["systemctl", "restart", "ai-server"],
+                           capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "重启超时（180s），配置已切换为 %s，请手动检查: systemctl status ai-server" % name}
+    time.sleep(2)  # 等状态落定再读
+    info = service_info()
+    return {"ok": r.returncode == 0,
+            "error": r.stderr.strip() or None,
+            "launcher": name,
+            "state": info}
+
 def proc_health(pid):
     """从 /proc 读进程 CPU 占用（0.5s 采样）、内存、运行时长。"""
     try:
@@ -2189,6 +2268,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(200, service_info())
             return
+        if path == "/api/admin/launcher":
+            if not self._admin_token():
+                self._json(401, {"error": "未登录"})
+                return
+            self._json(200, launcher_info())
+            return
         if path == "/api/admin/health":
             if not self._admin_token():
                 self._json(401, {"error": "未登录"})
@@ -2291,6 +2376,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/admin/service":
                 self._json(200, service_action(data.get("action", "")))
+                return
+            if path == "/api/admin/launcher":
+                self._json(200, launcher_switch(str(data.get("launcher", ""))))
                 return
             if path == "/api/admin/test":
                 self._json(200, test_generation(data.get("prompt", ""), data.get("n_predict", 64)))
