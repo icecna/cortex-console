@@ -82,7 +82,11 @@ if [ "$UNINSTALL" = 1 ]; then
   if [ "$PURGE" = 1 ]; then
     for d in "$DASH_DIR" "$LAUNCHERS_DIR"; do
       if [ "$NO_AI" = 1 ] && [ "$d" = "$LAUNCHERS_DIR" ]; then continue; fi
-      [ "$d" = "$SRC_DIR" ] && { warn "$d 是脚本所在目录，跳过删除"; continue; }
+      # 真正的风险是用户 shell 的 cwd 在被删目录里（删后 shell 丢失工作目录）；
+      # 脚本文件本身在 Linux 上可安全删除（内核保留 inode 至进程退出）
+      case "$(pwd)" in
+        "$d"|"$d"/*) warn "$d 包含当前工作目录，请先 cd 到其他目录再重跑 --purge，跳过"; continue ;;
+      esac
       if [ -d "$d" ]; then
         rm -rf "$d"
         note "已删除目录 $d"
@@ -149,12 +153,25 @@ EOF
 fi
 
 # ---------- ai-server ----------
+SRC_LAUNCHERS="$SRC_DIR/../ai-launchers"
 if [ "$NO_AI" = 1 ]; then
   info "--no-ai-server: 跳过 launcher / conf / ai-server.service"
+elif [ ! -d "$SRC_LAUNCHERS" ]; then
+  # 源目录缺失：若目标目录已有 dispatch.sh（就地升级场景）则用目标自身作源，否则跳过
+  if [ -x "$LAUNCHERS_DIR/dispatch.sh" ]; then
+    SRC_LAUNCHERS="$LAUNCHERS_DIR"
+    warn "launcher 源目录不存在，改用已安装的 $LAUNCHERS_DIR 自身"
+  else
+    warn "launcher 源目录不存在（$SRC_LAUNCHERS），跳过 ai-server 部分（同 --no-ai-server）"
+    NO_AI=1
+  fi
+fi
+if [ "$NO_AI" = 1 ]; then
+  :  # 已在上方输出说明
 else
   echo "==> 部署 launcher 到 $LAUNCHERS_DIR"
   mkdir -p "$LAUNCHERS_DIR"
-  for f in "$SRC_DIR"/../ai-launchers/*.sh "$SRC_DIR"/../ai-launchers/README.md; do
+  for f in "$SRC_LAUNCHERS"/*.sh "$SRC_LAUNCHERS"/README.md; do
     [ -f "$f" ] || continue
     dst="$LAUNCHERS_DIR/$(basename "$f")"
     if [ -f "$dst" ] && cmp -s "$f" "$dst"; then
@@ -171,8 +188,16 @@ else
 
   # /etc/ai-server.conf
   if [ -n "$INITIAL_LAUNCHER" ]; then
-    [ -f "$SRC_DIR/../ai-launchers/${INITIAL_LAUNCHER}.sh" ] \
+    [ -f "$SRC_LAUNCHERS/${INITIAL_LAUNCHER}.sh" ] \
       || die "launcher 脚本不存在: ${INITIAL_LAUNCHER}.sh"
+  else
+    # 未指定默认后端：取排序后的第一个脚本，保证新装即可用
+    INITIAL_LAUNCHER="$(for f in "$SRC_LAUNCHERS"/*.sh; do
+      [ "$(basename "$f")" = dispatch.sh ] && continue
+      basename "$f" .sh
+    done | sort | head -1)"
+    [ -n "$INITIAL_LAUNCHER" ] || die "launcher 目录为空，无法确定默认后端"
+    info "未指定 --launcher，默认使用: $INITIAL_LAUNCHER"
   fi
   CONF=/etc/ai-server.conf
   gen_conf() {
@@ -201,7 +226,7 @@ else
       for f in "$LAUNCHERS_DIR"/*.sh; do
         [ "$(basename "$f")" = dispatch.sh ] && continue
         name="$(basename "$f" .sh)"
-        if [ -n "$INITIAL_LAUNCHER" ] && [ "$name" = "$INITIAL_LAUNCHER" ]; then
+        if [ "$name" = "$INITIAL_LAUNCHER" ]; then
           echo "LAUNCHER=$name"
         else
           echo "#LAUNCHER=$name"
@@ -217,7 +242,7 @@ else
     note "已生成 $CONF$([ -n "$INITIAL_LAUNCHER" ] && echo "（默认后端: $INITIAL_LAUNCHER）")"
   fi
 
-  # systemd unit
+  # systemd unit：ai-server 部分（仅 NO_AI=0）
   if [ "$have_systemd" = 1 ]; then
     install_unit() {  # $1=模板 $2=unit名 $3=是否安装
       local tpl="$1" unit="$2"
@@ -231,7 +256,7 @@ else
       if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
         info "跳过（相同）: ${unit}.service"
       elif [ -f "$dst" ]; then
-        warn "${unit}.service 已存在且内容不同，不覆盖（diff 如下，如需更新请手工合并）:"
+        warn "${unit}.service 已存在且内容不同，不覆盖（diff 如下，如需更新请手工合并):"
         diff -u "$dst" "$tmp" | sed 's/^/    /' || true
       else
         cp -f "$tmp" "$dst"
@@ -239,22 +264,45 @@ else
       fi
       rm -f "$tmp"
     }
-    install_unit cortex-console.service.in cortex-console 1
-    install_unit ai-server.service.in ai-server $([ "$NO_AI" = 1 ] && echo 0 || echo 1)
-    systemctl daemon-reload
-    systemctl enable --now cortex-console
-    note "cortex-console.service 已启用并启动"
-    if [ "$NO_AI" = 1 ]; then
-      info "跳过 ai-server.service（--no-ai-server）"
-    else
-      systemctl enable --now ai-server
-      note "ai-server.service 已启用并启动"
-    fi
-  else
-    warn "未检测到 systemd，跳过 unit 安装。手动启动方式:"
-    echo "    cd $DASH_DIR && nohup python3 app.py > /var/log/cortex-console.log 2>&1 &"
-    [ "$NO_AI" = 1 ] || echo "    $LAUNCHERS_DIR/dispatch.sh &"
+    install_unit ai-server.service.in ai-server 1
   fi
+fi
+
+# ---------- systemd unit：cortex-console（始终安装） ----------
+if [ "$have_systemd" = 1 ]; then
+  install_unit() {  # 同上，重新定义作用域
+    local tpl="$1" unit="$2"
+    local tmp; tmp="$(mktemp)"
+    sed -e "s|__DASH_DIR__|$DASH_DIR|g" \
+        -e "s|__LAUNCHERS_DIR__|$LAUNCHERS_DIR|g" \
+        -e "s|__WORK_DIR__|$(dirname "$LAUNCHERS_DIR")|g" \
+        "$SRC_DIR/$tpl" > "$tmp"
+    local dst="/etc/systemd/system/${unit}.service"
+    if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
+      info "跳过（相同）: ${unit}.service"
+    elif [ -f "$dst" ]; then
+      warn "${unit}.service 已存在且内容不同，不覆盖（diff 如下，如需更新请手工合并):"
+      diff -u "$dst" "$tmp" | sed 's/^/    /' || true
+    else
+      cp -f "$tmp" "$dst"
+      note "已安装 ${unit}.service"
+    fi
+    rm -f "$tmp"
+  }
+  install_unit cortex-console.service.in cortex-console
+  systemctl daemon-reload
+  systemctl enable --now cortex-console
+  note "cortex-console.service 已启用并启动"
+  if [ "$NO_AI" = 1 ]; then
+    info "跳过 ai-server.service（--no-ai-server）"
+  else
+    systemctl enable --now ai-server
+    note "ai-server.service 已启用并启动"
+  fi
+else
+  warn "未检测到 systemd，跳过 unit 安装。手动启动方式:"
+  echo "    cd $DASH_DIR && nohup python3 app.py > /var/log/cortex-console.log 2>&1 &"
+  [ "$NO_AI" = 1 ] || echo "    $LAUNCHERS_DIR/dispatch.sh &"
 fi
 
 # ---------- 完成 ----------
