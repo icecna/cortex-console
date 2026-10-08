@@ -36,6 +36,13 @@
   backdrop-filter: blur(14px) saturate(1.3);
   -webkit-backdrop-filter: blur(14px) saturate(1.3);
 }
+/* 管理页 sticky 标签栏：不透明 --bg 在玻璃主题下滚动时会露出深色补丁，
+   改为半透明 + 模糊，与背景渐变融合 */
+.t-glass .tabbar {
+  background: rgba(7, 10, 24, .55);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+}
 
 /* 4. 终端 · CRT 绿 */
 .t-terminal {
@@ -67,4 +74,7 @@
   background: linear-gradient(90deg, #a78bfa, #60a5fa);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.t-bento .bar i { background: linear-gradient(90deg, #8b5cf6, #60a5fa); }
+/* 利用率条：默认紫蓝渐变；warn/bad 时用暖色渐变保留状态语义 */
+.t-bento .bar i:not(.warn):not(.bad) { background: linear-gradient(90deg, #8b5cf6, #60a5fa); }
+.t-bento .bar i.warn { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+.t-bento .bar i.bad { background: linear-gradient(90deg, #fb7185, #f43f5e); }

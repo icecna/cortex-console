@@ -397,7 +397,7 @@ function render(d) {
       '<div class="def"><span class="k">PCIe 链路</span><span class="v">' + (lk ? "Gen" + lk.gen + " x" + lk.width + (lk.gbps ? " (" + lk.gbps + " Gb/s)" : "") : "—") + '</span></div>' +
       '<div class="def"><span class="k">PCIe (Rx/Tx)</span><span class="v">' + fmt(pc.rx == null ? "—" : pc.rx) + ' / ' + fmt(pc.tx == null ? "—" : pc.tx) + ' MB/s' + (capMbs ? ' <span class="sub">(' + fmt(rxPct) + '% / ' + fmt(txPct) + '%)</span>' : "") + '</span></div>' +
       '</div>' +
-      '<div class="bar"><i style="width:' + (x.util || 0) + '%"></i></div>' +
+      '<div class="bar"><i class="' + cls(x.util, 70, 90) + '" style="width:' + (x.util || 0) + '%"></i></div>' +
       '</div>';
   });
   // 内容不变则跳过 DOM 重建（数据 2s 才变一次，轮询 1s）
