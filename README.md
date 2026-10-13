@@ -121,7 +121,6 @@ cmdline = "--port 8080"
 | POST | `/api/admin/service` | `{action: start/stop/restart}` |
 | GET | `/api/admin/launcher` | 当前 default section + 全部 section 列表 |
 | POST | `/api/admin/launcher` | `{launcher: <section名>}` 切换 default 并重启（原子改 conf + 备份） |
-| GET | `/api/admin/ai-conf` | conf 全文 + 当前 section 名 + 渲染出的完整命令（只读） |
 | POST | `/api/admin/ai-conf/new` | 新建 section 骨架（`{name, server_type}`），不改 default（创建 ≠ 激活） |
 | POST | `/api/admin/ai-conf/delete` | 删除非激活 section（`{name}`，仅 models.d/ 下定义的） |
 | GET | `/api/admin/health` | 进程 CPU/内存/运行时长 + API 探测 |

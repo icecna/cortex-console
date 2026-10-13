@@ -1506,19 +1506,7 @@ def launcher_switch(name):
         return {"ok": False, "error": "重启超时（180s），配置已切换为 %s，请手动检查: systemctl status ai-server" % name}
     time.sleep(2)
     return {"ok": r.returncode == 0, "error": r.stderr.strip() or None,
-            "launcher": name, "state": service_info()}
-
-def ai_conf_info():
-    """conf 全文 + 当前 section 名 + 当前 section 渲染出的完整命令（管理页“AI Server 配置”卡片用）。"""
-    conf = ""
-    try:
-        with open(AI_SERVER_CONF) as f:
-            conf = f.read()
-    except OSError:
-        pass
-    name, sec = _active_section()
-    return {"conf": conf, "current": name or "",
-            "cmd": _sec_to_cmdline_str(sec) if sec else ""}
+            "section": name, "state": service_info()}
 
 SERVER_TYPES = ("ninfer", "llama.cpp")
 
@@ -1880,7 +1868,7 @@ _NINFER_FIELD_MAP = {p: k for p, k in NINFER_VALUE_FIELDS + NINFER_CHK}
 def _ninfer_empty():
     d = {k: "" for _, k in NINFER_VALUE_FIELDS}
     d.update({k: False for _, k in NINFER_CHK})
-    d.update({"model": "", "binary": "", "model_form": "positional", "custom": "", "preamble": "", "order": []})
+    d.update({"model": "", "binary": "", "model_form": "positional", "custom": "", "order": []})
     return d
 
 
@@ -1912,36 +1900,9 @@ def _ninfer_parse_args(tokens, out):
     return out
 
 
-def parse_ninfer_script(path):
-    """解析 launcher wrapper：preamble（exec 之前逐字保留）+ exec 行 → 字段。"""
-    out = _ninfer_empty()
-    try:
-        with open(path) as f:
-            lines = f.read().splitlines()
-    except Exception:
-        return None
-    idx = next((i for i, l in enumerate(lines) if l.strip().startswith("exec ")), None)
-    if idx is None:
-        return None
-    out["preamble"] = "\n".join(lines[:idx])
-    raw = re.findall(r"'[^']*'|\"[^\"]*\"|\S+", " ".join(" ".join(lines[idx:]).split()))
-    tokens = [t for t in raw if t != "\\"]  # 去掉行续接符
-    if not tokens or tokens[0] != "exec" or len(tokens) < 3:
-        return None
-    out["binary"] = tokens[1]
-    if tokens[2].startswith("model="):  # Duo 形式：model=PATH
-        out["model_form"] = "kv"
-        out["model"] = tokens[2][len("model="):]
-    else:  # 直连形式：位置参数
-        out["model_form"] = "positional"
-        out["model"] = tokens[2]
-    _ninfer_parse_args(tokens[3:], out)
-    return out
-
-
 def parse_ninfer_cmdline(cmd):
-    """解析运行进程完整 cmdline（含 launcher 默认值）→ 有效字段值。last-wins。
-    只取字段值（不含 binary/model/model_form/preamble，那些以 wrapper 为准）。"""
+    """解析运行进程完整 cmdline → 有效字段值（last-wins）。
+    只取参数字段值（binary/model/model_form 以 conf section 为准）。"""
     out = _ninfer_empty()
     if not cmd:
         return out
@@ -1954,8 +1915,8 @@ def parse_ninfer_cmdline(cmd):
 
 
 def _ninfer_from_section(sec):
-    """conf section → ninfer 字段 dict（与 parse_ninfer_script 输出同构）。
-    binary=execute、model=model、model_form 由 model_flag 推导，cmdline 拆成字段。"""
+    """conf section → ninfer 字段 dict。binary=execute、model=model、
+    model_form 由 model_flag 推导，cmdline 拆成字段。"""
     out = _ninfer_empty()
     out["binary"] = sec.get("execute", "")
     out["model"] = sec.get("model", "")
@@ -1990,34 +1951,6 @@ def _ninfer_build_parts(parsed):
     if custom:
         parts += shlex.split(custom)   # 保留引号：带空格的取值不会被拆碎
     return parts
-
-
-def _ninfer_format_exec(parts):
-    """parts → 带反斜杠续行的多行（首行 exec，续行缩进 2 空格、每行 ≤80 列）。"""
-    out = [" ".join(parts[:3])]
-    cur, n = "", 0
-    for tok in parts[3:]:
-        if not cur:
-            cur, n = tok, len(tok)
-        elif n + 1 + len(tok) <= 80:
-            cur += " " + tok
-            n += 1 + len(tok)
-        else:
-            out.append("  " + cur + " \\")
-            cur, n = tok, len(tok)
-    if cur:
-        out.append("  " + cur)
-    if len(out) > 1:          # 有续行时首行需加反斜杠
-        out[0] += " \\"
-    return out
-
-
-def ninfer_build_script(parsed):
-    pre = (parsed.get("preamble") or "")
-    if pre and not pre.endswith("\n"):
-        pre += "\n"
-    body = "\n".join(_ninfer_format_exec(_ninfer_build_parts(parsed)))
-    return pre + body + "\n"
 
 
 def ninfer_save(fields, restart=False, section=None):
@@ -2090,7 +2023,7 @@ def ninfer_save(fields, restart=False, section=None):
             and not _in_range(new.get("vision_max_tokens"), 1, 32768):
         return _err("--vision-max-tokens 需在 1..32768")
     if not new.get("binary"):
-        return {"ok": False, "error": "launcher 缺少 exec 主程序"}
+        return {"ok": False, "error": "section 缺少 execute（主程序）"}
     if not new.get("model"):
         return {"ok": False, "error": "model 不能为空"}
     if not os.path.isfile(new["model"]):
@@ -2246,7 +2179,7 @@ def cmd_info(name=None):
                   [k for _, k in NINFER_VALUE_FIELDS] + [k for _, k in NINFER_CHK]
                   + ["model", "binary", "model_form", "custom"]}
         return {"backend": "ninfer", "default": default_name,
-                "ninfer": {"launcher": name, "file": AI_SERVER_CONF, "source": source, "parsed": parsed},
+                "ninfer": {"section": name, "file": AI_SERVER_CONF, "source": source, "parsed": parsed},
                 "current": cmd or _sec_to_cmdline_str(sec) or "（服务未运行；启动后此处显示实际启动命令）",
                 "parsed": None, "history": []}
     # llama / 未知后端：用 section 渲染的完整命令
@@ -2398,7 +2331,7 @@ def cmd_save(new_cmd, restart=False, section=None):
         return {"ok": False, "error": err}
     if _sec_backend(sec) == "ninfer":
         return {"ok": False,
-                "error": "NInfer 后端的启动参数请用上方 NInfer 表单编辑（或 AI Server 配置卡片）"}
+                "error": "NInfer 后端的启动参数请用上方 NInfer 表单编辑"}
     if not name:
         return {"ok": False, "error": "配置中没有激活的 section（default 无效）"}
     new_cmd = " ".join(new_cmd.split())
@@ -2560,12 +2493,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "未登录"})
                 return
             self._json(200, launcher_info())
-            return
-        if path == "/api/admin/ai-conf":
-            if not self._admin_token():
-                self._json(401, {"error": "未登录"})
-                return
-            self._json(200, ai_conf_info())
             return
         if path == "/api/admin/health":
             if not self._admin_token():

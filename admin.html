@@ -1201,7 +1201,7 @@ async function loadCmd() {
     $("cmd_edit_area").style.display = "none";
     $("ninfer_area").style.display = "";
     const nf = j.ninfer || {};
-    $("n_file_msg").textContent = "编辑 section：[" + (nf.launcher || "?") + "]" +
+    $("n_file_msg").textContent = "编辑 section：[" + (nf.section || "?") + "]" +
       (nf.source === "process" ? "　·　字段值来自运行进程实际配置" : "");
     const cur = j.current || "";
     if (cur && !cur.startsWith("（")) {

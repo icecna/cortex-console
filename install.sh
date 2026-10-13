@@ -12,6 +12,8 @@
 set -euo pipefail
 
 DASH_DIR=/mnt/models/cortex-console
+# 辅助目录：旧版 launcher 脚本所在（升级时迁移成 section）、unit 的 WorkingDirectory、
+# 请求日志输出目录。ai-server 本身的启动入口在 $DASH_DIR/service/dispatch.sh。
 LAUNCHERS_DIR=/mnt/models/ai-launchers
 INITIAL_LAUNCHER=""
 ADMIN_PW=""
