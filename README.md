@@ -51,8 +51,9 @@ cmdline = "--tp 2 --port 8080"   # 可选，不含 model
 
 - 每个 section = 一个后端（llama.cpp / NInfer / 任意推理服务），独立成文件，互不干扰
 - `server-type` 声明推理框架（`ninfer` / `llama.cpp`），决定管理页显示哪种参数表单；缺失时回退按 `execute` 文件名推断
-- `dispatch.sh` 每次启动读 `default` 指向的 section 并 exec；主文件 section 覆盖 include 同名 section
-- 管理页「新建 section」和「启动参数」表单直接读写各自的 `models.d/<name>.conf`（原子写），「后端切换」只改主文件的 `default` 行
+- `dispatch.sh` 每次启动读 `default` 指向的 section 并 exec；主文件里的同名 section **整体覆盖** include 里的（不是按字段合并）
+- 管理页「新建 section」和「启动参数」表单直接读写各自的 `models.d/<name>.conf`（原子写 + `.bak`），
+  「后端切换」只改主文件的 `default` 行；**定义在主文件里的 section 管理页不写回**（写回会被主文件覆盖、不生效），只能手工编辑
 
 ### 通过管理页切换
 
@@ -82,6 +83,10 @@ admin 页 → 服务控制 tab → **🛠️ 服务控制** 卡片内的后端�
 sed -i 's/^default = .*/default = <section名>/' /etc/cortex-console/ai-server.conf
 systemctl restart ai-server
 journalctl -u ai-server -f   # 看启动日志
+
+# 只预检不启动（看 default section 会跑出什么命令、配置是否有效）
+python3 service/ai_conf.py check /etc/cortex-console/ai-server.conf
+CORTEX_DRY_RUN=1 service/dispatch.sh
 ```
 
 ### 新增一个后端
@@ -155,10 +160,11 @@ admin.html    管理页
 themes.html   主题选择页
 style.css     主样式
 themes.css    主题皮肤
-install.sh    安装/卸载脚本
+install.sh    安装/卸载脚本（含旧版 LAUNCHER 配置自动迁移）
 conf.sample   ai-server.conf 主文件示例（首次安装时生成 /etc/cortex-console/ai-server.conf）
 conf.sample.d/  示例 section 文件（首次安装时部署到 /etc/cortex-console/models.d/）
-service/dispatch.sh   ai-server 启动入口（读 conf 的 default section 并 exec）
+service/ai_conf.py    conf 解析 + argv 构建的唯一实现（dispatch 与管理页共用；带 check/dump/launch CLI）
+service/dispatch.sh   ai-server 启动入口（薄壳，调 ai_conf.py launch）
 cortex-console.service.in   systemd unit 模板（路径占位符由 install.sh 替换）
 ai-server.service.in        同上
 README.md     本文档

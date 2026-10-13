@@ -1,9 +1,16 @@
 # service/
 
-- `dispatch.sh` — ai-server 的启动入口。systemd 托管它，它读取
-  `/etc/cortex-console/ai-server.conf` 中 `default` 指向的 section，
-  设置 `env` 后 `exec` 该 section 的 `execute`（推理服务前台运行，
-  崩溃时 systemd `Restart=on-failure` 拉起）。
+- `ai_conf.py` — **conf 解析与 argv 构建的唯一实现**：`parse_conf()`（include/section/引号/
+  覆盖语义）、`build_argv()`、`env_pairs()`。ai-server 启动入口与管理页（`app.py`）共用，
+  不存在两份解析漂移。也可单独跑：
+  - `ai_conf.py launch <conf>` — 解析 + 校验 + exec
+  - `ai_conf.py check <conf>` — 只校验 default section 能否启动（`install.sh` 预检用）
+  - `ai_conf.py dump <conf>` — 打印解析结果（排障）
+- `dispatch.sh` — ai-server 的启动入口（薄壳）：`exec python3 ai_conf.py launch <conf>`。
+  systemd 托管它，它读 `/etc/cortex-console/ai-server.conf` 中 `default` 指向的 section，
+  设置 `env` 后 `exec` 该 section 的 `execute`（推理服务前台运行，崩溃时 systemd
+  `Restart=on-failure` 拉起）。`CORTEX_DRY_RUN=1` 只打印命令不启动；`AI_SERVER_CONF=...`
+  可指定其他 conf（测试用）。
 - `cortex-console.service.in` / `ai-server.service.in` — systemd unit 模板，
   `install.sh` 用 sed 替换 `__DASH_DIR__` / `__LAUNCHERS_DIR__` / `__WORK_DIR__`
   后安装到 `/etc/systemd/system/`。

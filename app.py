@@ -20,6 +20,7 @@ import secrets
 import select
 import shlex
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -34,6 +35,14 @@ POLL_LLAMA = 0.5  # llama metrics 采样间隔（速度类指标更跟手）
 HISTORY_LEN = 300  # 10 分钟 @ 2s
 NPROC = os.cpu_count()
 BASE = os.path.dirname(os.path.abspath(__file__))
+
+# 后端 conf 的解析与 argv 构建：与 ai-server 启动入口（service/dispatch.sh）共用同一份实现
+sys.path.insert(0, os.path.join(BASE, "service"))
+try:
+    from ai_conf import build_argv, cmd_string, parse_conf  # noqa: E402
+except ImportError as _e:      # 部署不完整时给明确提示，而不是一个难懂的 ImportError
+    sys.exit("无法导入 %s/service/ai_conf.py（安装不完整？重跑 install.sh）: %s"
+             % (BASE, _e))
 
 # ---------------- 基础读取 ----------------
 
@@ -105,6 +114,16 @@ def _proc_cmdline(pid):
             return f.read().replace(b"\0", b" ").decode().strip()
     except Exception:
         return None
+
+def _proc_argv(pid):
+    """进程 argv（按 NUL 分割）：路径含空格时不会被拆错，用于精确比对。"""
+    if pid is None:
+        return []
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            return [x.decode(errors="replace") for x in f.read().split(b"\0") if x]
+    except Exception:
+        return []
 
 def _last_flag(cmd, flag):
     """cmd 中 flag 最后一次出现的取值（ninfer 的 cmdline 里 launcher 默认值
@@ -1226,75 +1245,24 @@ def service_action(action):
 AI_SERVER_CONF = "/etc/cortex-console/ai-server.conf"
 AI_CONF_DIR = "/etc/cortex-console"
 AI_MODELS_D = os.path.join(AI_CONF_DIR, "models.d")
+_CONF_DEFAULT_RE = re.compile(r"^default\s*=", re.I)  # 严格匹配，不误伤 defaults / default_xxx
 _launcher_lock = threading.Lock()  # 防止并发编辑 conf 时读-改-写交叉
+SEC_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _check_sec_name(name):
+    """section 名白名单校验（名字会拼进 models.d/<name>.conf 文件名，必须严格）。
+    返回错误串或 None。"""
+    if not name or not SEC_NAME_RE.match(name):
+        return "非法 section 名: %s（仅允许字母/数字/._-，且以字母或数字开头）" % name
+    return None
 
 
 def parse_ai_conf(path=None):
-    """解析 ai-server.conf（INI 风格 + include glob）。
-    返回 {"default": name|None, "sections": {name: {execute, model, model_flag, env, cmdline}}}。
-    主文件 section 覆盖 include 同名 section；default 只取主文件第一个 default 行。"""
-    path = path or AI_SERVER_CONF
-    seen = set()
-    def _unquote(v):
-        v = v.strip()
-        if len(v) >= 2 and v[0] == v[-1]:
-            if v[0] == '"':
-                v = v[1:-1]
-                out, i = [], 0
-                while i < len(v):
-                    if v[i] == "\\" and i + 1 < len(v):
-                        out.append(v[i + 1]); i += 2
-                    else:
-                        out.append(v[i]); i += 1
-                v = "".join(out)
-            elif v[0] == "'":
-                v = v[1:-1]
-        return v
-    def collect(p):
-        secs = {}
-        real = os.path.realpath(p)
-        if real in seen:
-            return secs
-        seen.add(real)
-        try:
-            with open(p) as f:
-                lines = [l.strip() for l in f]
-        except OSError:
-            return secs
-        for line in lines:  # 先 include（本文件 section 优先）
-            if line.lower().startswith("include "):
-                for inc in sorted(glob.glob(line[8:].strip())):
-                    secs.update(collect(inc))
-        cur = None
-        for line in lines:
-            if not line or line[0] in "#;":
-                continue
-            if line.lower().startswith("include "):
-                continue
-            if line.startswith("[") and line.endswith("]"):
-                cur = line[1:-1].strip()
-                secs.setdefault(cur, {})
-                continue
-            if cur is None or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            secs[cur][k.strip()] = _unquote(v)
-        return secs
-    sections = collect(path)
-    default = None
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line[0] in "#;":
-                    continue
-                if line.lower().startswith("default"):
-                    if "=" in line:
-                        default = _unquote(line.split("=", 1)[1])
-                    break
-    except OSError:
-        pass
-    return {"default": default, "sections": sections}
+    """解析 ai-server.conf（INI 风格 + include glob）→
+    {"default": name|None, "sections": {name: {...}}, "origin": {name: 定义文件}}。
+    实现在 service/ai_conf.py，与 dispatch.sh 共用（同名 section：主文件整体覆盖 include）。"""
+    return parse_conf(path or AI_SERVER_CONF)
 
 
 def _sec_backend(sec):
@@ -1320,39 +1288,45 @@ def _cmd_q(t):
     return q if q != t else t
 
 def _sec_to_cmdline_str(sec):
-    """section → 完整命令字符串（execute + [model_flag] model + cmdline），供 parse_cmd 用。"""
-    parts = [sec.get("execute", "")]
-    model = sec.get("model", "")
-    if model:
-        flag = sec.get("model_flag", "")
-        if flag:
-            parts.append(flag + model if flag.endswith("=") else flag)
-            if not flag.endswith("="):
-                parts.append(model)
-        else:
-            parts.append(model)
-    parts += shlex.split(sec.get("cmdline", ""))
-    return " ".join(_cmd_q(p) for p in parts if p)
+    """section → 完整命令字符串（execute + [model_flag] model + cmdline），供 parse_cmd 用。
+    argv 构建与 dispatch 共用 build_argv，保证「管理页看到的」== 「实际启动的」。"""
+    return cmd_string(sec)
 
 
 _sec_cmdline = _sec_to_cmdline_str  # 别名（llama_base/cmd_diff 用）
 
 
-def _cmdline_str_to_sec(cmd):
+def _cmdline_str_to_sec(cmd, keep_flag=None):
     """完整命令字符串 → section dict（拆出 execute/model/model_flag/cmdline）。
-    用于 llama 表单：buildCmd 输出含 -m model 的完整命令。"""
+    用于 llama 表单：buildCmd 输出含 -m model 的完整命令。
+    keep_flag：原 section 里的 model_flag，优先按它定位 model（否则 conf 里写的
+    `--model /path` 存一次就退化成位置参数，llama-server 起不来）。"""
     tokens = shlex.split(cmd or "")
     if not tokens:
         return {}
     sec = {"execute": tokens[0], "model": "", "model_flag": "", "cmdline": ""}
     rest = tokens[1:]
-    for i, t in enumerate(rest):
-        if t == "-m":
-            sec["model_flag"] = "-m"
-            sec["model"] = rest[i + 1] if i + 1 < len(rest) else ""
-            rest = rest[:i] + rest[i + 2:]
+    # 候选 model flag：原 section 的优先，其次常见写法（-m / --model / -model / --model=）
+    cands = [f for f in ((keep_flag or "").strip(), "-m", "--model", "-model") if f]
+    found = False
+    for flag in dict.fromkeys(cands):
+        for i, t in enumerate(rest):
+            if flag.endswith("="):                          # 键值融合：model=/path
+                if not t.startswith(flag):
+                    continue
+                sec["model_flag"], sec["model"] = flag, t[len(flag):]
+            elif t != flag:
+                continue
+            elif i + 1 < len(rest) and not rest[i + 1].startswith("-"):
+                sec["model_flag"], sec["model"] = flag, rest[i + 1]
+            else:
+                continue
+            rest = rest[:i] + rest[i + 1 if flag.endswith("=") else i + 2:]
+            found = True
             break
-    if not sec["model"]:  # 位置参数（第一个非 flag token）
+        if found:
+            break
+    if not found:  # 没找到 model flag → 位置参数（第一个非 flag token）
         for i, t in enumerate(rest):
             if not t.startswith("-"):
                 sec["model"] = rest[i]
@@ -1393,7 +1367,7 @@ def _conf_set_default(name):
     out, replaced = [], False
     for line in lines:
         s = line.strip()
-        if s and s[0] not in "#;" and s.lower().startswith("default") and "=" in s:
+        if s and s[0] not in "#;" and _CONF_DEFAULT_RE.match(s):
             out.append("default = %s" % name)
             replaced = True
         else:
@@ -1409,8 +1383,22 @@ def _sec_file(name):
     return os.path.join(AI_MODELS_D, name + ".conf")
 
 
+def _sec_editable(name, conf=None):
+    """section 能否由管理页写回 models.d/<name>.conf。返回错误串或 None。
+    看解析后的 origin（而不是文件存在否）：同名 section 若主文件里也有，主文件
+    整体覆盖 include，写 models.d 不生效；定义在主文件里的同样只能手工编辑。"""
+    conf = conf or parse_ai_conf()
+    if name not in conf["sections"]:
+        return "section 不存在: %s" % name
+    origin = conf.get("origin", {}).get(name)
+    if not origin or os.path.realpath(origin) != os.path.realpath(_sec_file(name)):
+        return ("section %s 定义在主文件 %s 里（管理页只读写 models.d/，写回会被覆盖不生效）；"
+                "请手工编辑主文件" % (name, origin or AI_SERVER_CONF))
+    return None
+
+
 def _write_sec_file(name, sec, comment=None):
-    """把单个 section 原子写入 models.d/<name>.conf。
+    """把单个 section 原子写入 models.d/<name>.conf（旧内容备份 .bak）。
     sec: {key: value}；空值的 model_flag/env 省略（缺失 = 位置参数/无环境变量）。"""
     lines = []
     if comment:
@@ -1422,11 +1410,20 @@ def _write_sec_file(name, sec, comment=None):
             continue
         lines.append("%s = %s" % (k, _conf_quote(v)))
     text = "\n".join(lines) + "\n"
-    tmp = _sec_file(name) + ".tmp"
+    dst = _sec_file(name)
+    if os.path.isfile(dst):
+        try:
+            with open(dst) as f:
+                with open(dst + ".bak", "w") as f2:
+                    f2.write(f.read())
+        except OSError:
+            pass
+    # tmp 名带 pid + 随机后缀：手工编辑与页面并发时不会互踩同一个 .tmp
+    tmp = "%s.%d.%s.tmp" % (dst, os.getpid(), os.urandom(4).hex())
     with open(tmp, "w") as f:
         f.write(text)
     os.chmod(tmp, 0o644)
-    os.replace(tmp, _sec_file(name))
+    os.replace(tmp, dst)
 
 
 def _active_section():
@@ -1437,31 +1434,43 @@ def _active_section():
     return (name, sec)
 
 
+def _sec_argv_tokens(sec):
+    """section 的预期 argv（不校验 model 存在）；无 execute 返回 []。"""
+    try:
+        return build_argv(sec, check_model=False)
+    except ValueError:
+        return []
+
+
 def running_section():
-    """当前实际运行的 section 名：用运行进程 cmdline 首 token（execute 路径）
-    与各 section 的 execute 匹配。服务未运行/无法匹配返回 None。"""
+    """当前实际运行的 section 名。
+    先按 argv 逐项完全匹配（execute + 参数全一致），再退回只比 execute：
+    两个 section 共用同一 execute（仅参数不同）时，只有 argv 匹配能分清是谁在跑。"""
     _, pid, _ = detect_service()
     if pid is None:
         return None
-    cmd = _proc_cmdline(pid) or ""
-    exe = cmd.split()[0] if cmd.split() else ""
-    if not exe:
+    argv = _proc_argv(pid)
+    if not argv:
         return None
     try:
-        real = os.path.realpath(exe)
+        real = os.path.realpath(argv[0])
     except OSError:
-        real = exe
+        real = argv[0]
+    loose = None
     for name, sec in parse_ai_conf()["sections"].items():
         s_exe = (sec.get("execute") or "").strip()
         if not s_exe:
             continue
         try:
-            if os.path.realpath(s_exe) == real:
-                return name
+            same = os.path.realpath(s_exe) == real
         except OSError:
-            if s_exe == exe:
-                return name
-    return None
+            same = s_exe == argv[0]
+        if not same:
+            continue
+        if _sec_argv_tokens(sec) == argv:   # 参数也一致 → 确定是这个 section
+            return name
+        loose = loose or name
+    return loose
 
 
 def launcher_info():
@@ -1476,8 +1485,9 @@ def launcher_info():
 
 def launcher_switch(name):
     """校验 section 存在且 execute 可执行 → 改写 default 行 → 重启 ai-server。"""
-    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", name):
-        return {"ok": False, "error": "非法 section 名: %s" % name}
+    err = _check_sec_name(name)
+    if err:
+        return {"ok": False, "error": err}
     conf = parse_ai_conf()
     sec = conf["sections"].get(name)
     if not sec:
@@ -1515,29 +1525,34 @@ SERVER_TYPES = ("ninfer", "llama.cpp")
 def launcher_create(name, server_type):
     """在 models.d/ 下新建一个 section 骨架（name 需合法且未占用）。
     不改 default：创建 ≠ 激活，激活走「后端切换」（有 execute 校验 + 重启）。"""
-    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", name):
-        return {"ok": False, "error": "非法 section 名: %s" % name}
+    err = _check_sec_name(name)
+    if err:
+        return {"ok": False, "error": err}
     if server_type not in SERVER_TYPES:
         return {"ok": False, "error": "非法 server-type: %s（可选 %s）" % (server_type, " / ".join(SERVER_TYPES))}
     conf = parse_ai_conf()
     if name in conf["sections"]:
         return {"ok": False, "error": "section 已存在: %s" % name}
+    skeleton = {
+        "server-type": server_type,
+        "execute": "/path/to/server",
+        "model": "/path/to/model",
+        "cmdline": "--port 8080",
+    }
+    if "llama" in server_type:      # llama-server 需要 -m 标志，位置参数写法起不来
+        skeleton["model_flag"] = "-m"
     with _launcher_lock:
         try:
-            _write_sec_file(name, {
-                "server-type": server_type,
-                "execute": "/path/to/server",
-                "model": "/path/to/model",
-                "cmdline": "--port 8080",
-            }, comment="骨架配置：先在管理页「启动参数」填真实 execute/model 路径，再用「服务控制 → 后端切换」激活")
+            _write_sec_file(name, skeleton, comment="骨架配置：先在管理页「启动参数」填真实 execute/model 路径，再用「服务控制 → 后端切换」激活")
         except OSError as e:
             return {"ok": False, "error": "写入 %s 失败: %s" % (_sec_file(name), e)}
     return {"ok": True, "name": name}
 
 def launcher_delete(name):
     """删除非激活 section 的 models.d/<name>.conf（激活/运行中的不可删）。"""
-    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", name):
-        return {"ok": False, "error": "非法 section 名: %s" % name}
+    err = _check_sec_name(name)
+    if err:
+        return {"ok": False, "error": err}
     conf = parse_ai_conf()
     if name not in conf["sections"]:
         return {"ok": False, "error": "section 不存在: %s" % name}
@@ -1546,7 +1561,8 @@ def launcher_delete(name):
     if name == running_section():
         return {"ok": False, "error": "section %s 正在运行，请先停止服务" % name}
     sf = _sec_file(name)
-    if not os.path.isfile(sf):
+    org = conf.get("origin", {}).get(name) or ""
+    if os.path.realpath(org) != os.path.realpath(sf):
         return {"ok": False, "error": "section %s 定义在主配置文件中（非 models.d/），请手工编辑 ai-server.conf 删除" % name}
     with _launcher_lock:
         try:
@@ -1972,7 +1988,7 @@ def _ninfer_build_parts(parsed):
         emit(key); seen.add(key)
     custom = (parsed.get("custom") or "").strip()
     if custom:
-        parts += custom.split()
+        parts += shlex.split(custom)   # 保留引号：带空格的取值不会被拆碎
     return parts
 
 
@@ -2006,15 +2022,20 @@ def ninfer_build_script(parsed):
 
 def ninfer_save(fields, restart=False, section=None):
     """按表单字段更新指定 section（缺省 = default 激活的）的 model/cmdline，可选重启。"""
+    conf = parse_ai_conf()
     if section:
+        err = _check_sec_name(section)
+        if err:
+            return {"ok": False, "error": err}
         name = section
-        sec = parse_ai_conf()["sections"].get(name)
-        if not sec:
-            return {"ok": False, "error": "section 不存在: %s" % name}
     else:
-        name, sec = _active_section()
+        name = conf["default"]
+    sec = conf["sections"].get(name) if name else None
     if not sec:
-        return {"ok": False, "error": "配置中没有激活的 section（default 无效）"}
+        return {"ok": False, "error": "section 不存在或 default 无效: %s" % (name or "")}
+    err = _sec_editable(name, conf)   # 默认（编辑激活 section）路径同样要挡
+    if err:
+        return {"ok": False, "error": err}
     if _sec_backend(sec) != "ninfer":
         return {"ok": False, "error": "当前 section 不是 NInfer 后端，无法用 NInfer 表单编辑"}
     cur = _ninfer_from_section(sec)
@@ -2086,7 +2107,7 @@ def ninfer_save(fields, restart=False, section=None):
         "model": new["model"],
         "model_flag": "model=" if new.get("model_form") == "kv" else "",
         "env": (sec.get("env") or "").strip(),
-        "cmdline": " ".join(parts[3:]),
+        "cmdline": " ".join(_cmd_q(t) for t in parts[3:]),
     }
     with _launcher_lock:
         try:
@@ -2107,13 +2128,18 @@ def ninfer_save(fields, restart=False, section=None):
     return {"ok": True, "changed": True, "error": None, "state": info}
 
 
+_MODEL_FLAG_ALIAS_RE = re.compile(r"(?:^|\s)(?:--model|-model)(?:=|(?=\s))")
+
+
 def parse_cmd(cmd):
     """把启动命令拆成表单字段，未识别的参数留在 custom。"""
     d = {k: "" for _, k in NUM_FIELDS + SEL_FIELDS + TEXT_FIELDS + FILE_FIELDS}
     d.update({k: False for _, k in BOOL_FIELDS})
     d["binary"] = ""
     d["custom"] = ""
-    rest = cmd
+    # llama.cpp 的 --model / -model / --model= 与 -m 等价：先归一化成 -m，否则 model 字段为空
+    # （token 边界 + 要求后跟空白或 =，不会误伤 --model-draft / --tokenizer-model）
+    rest = _MODEL_FLAG_ALIAS_RE.sub(" -m ", cmd or "", count=1)
     m = re.match(r"(\S+)", rest)
     if m:
         d["binary"] = m.group(1)
@@ -2356,13 +2382,20 @@ def _check_cmd_files(cmd):
     return None
 
 def cmd_save(new_cmd, restart=False, section=None):
+    conf = parse_ai_conf()
     if section:
+        err = _check_sec_name(section)
+        if err:
+            return {"ok": False, "error": err}
         name = section
-        sec = parse_ai_conf()["sections"].get(name)
-        if not sec:
-            return {"ok": False, "error": "section 不存在: %s" % name}
     else:
-        name, sec = _active_section()
+        name = conf["default"]
+    sec = conf["sections"].get(name) if name else None
+    if not sec:
+        return {"ok": False, "error": "section 不存在或 default 无效: %s" % (name or "")}
+    err = _sec_editable(name, conf)   # 默认（编辑激活 section）路径同样要挡
+    if err:
+        return {"ok": False, "error": err}
     if _sec_backend(sec) == "ninfer":
         return {"ok": False,
                 "error": "NInfer 后端的启动参数请用上方 NInfer 表单编辑（或 AI Server 配置卡片）"}
@@ -2378,7 +2411,7 @@ def cmd_save(new_cmd, restart=False, section=None):
     err = _check_cmd_files(new_cmd)
     if err:
         return {"ok": False, "error": err}
-    new_sec = _cmdline_str_to_sec(new_cmd)
+    new_sec = _cmdline_str_to_sec(new_cmd, keep_flag=sec.get("model_flag", ""))
     if not new_sec.get("execute"):
         return {"ok": False, "error": "命令缺少主程序"}
     keys = ("execute", "model", "model_flag", "cmdline")

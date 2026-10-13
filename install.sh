@@ -120,7 +120,8 @@ echo "==> 部署 cortex-console 到 $DASH_DIR"
 mkdir -p "$DASH_DIR"
 CODE_UPDATED=0
 for f in app.py index.html admin.html themes.html style.css themes.css \
-         service/dispatch.sh README.md INSTALL.md cortex-console.service.in ai-server.service.in; do
+         service/dispatch.sh service/ai_conf.py README.md INSTALL.md \
+         cortex-console.service.in ai-server.service.in; do
   src="$SRC_DIR/$f" dst="$DASH_DIR/$f"
   [ -f "$src" ] || continue
   if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
@@ -158,10 +159,13 @@ EOF
   note "已生成 admin.json (scrypt 加盐哈希, 600)"
 fi
 
-# systemd unit 安装（$1=模板 $2=unit名 $3=是否安装）
+# systemd unit 安装（$1=模板 $2=unit名 $3=是否安装 $4=旧版本自动升级）
+# $4=1 时：已存在的 unit 若 ExecStart 指向本仓库旧版 dispatch.sh（即本项目的旧安装），
+# 备份后直接覆盖；用户自己改过的 unit 仍然只 diff 不碰。
 install_unit() {
   local tpl="$1" unit="$2"
   [ "${3:-0}" = 1 ] || return 0
+  local force="${4:-0}"
   local tmp; tmp="$(mktemp)"
   sed -e "s|__DASH_DIR__|$DASH_DIR|g" \
       -e "s|__LAUNCHERS_DIR__|$LAUNCHERS_DIR|g" \
@@ -170,6 +174,13 @@ install_unit() {
   local dst="/etc/systemd/system/${unit}.service"
   if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
     info "跳过（相同）: ${unit}.service"
+  elif [ -f "$dst" ] && [ "$force" = 1 ] && grep -qE '^ExecStart=.*dispatch\.sh$' "$dst" \
+       && diff <(grep -v '^ExecStart=' "$dst") <(grep -v '^ExecStart=' "$tmp") >/dev/null; then
+    # 旧入口是本仓库旧版 dispatch.sh，且除 ExecStart 外其余行与新模板完全一致
+    # → 确认是“本项目的旧安装”；用户自改过（Environment/ExecStartPre/资源限制等）不进这个分支
+    cp -f "$dst" "$dst.pre-section.bak"
+    cp -f "$tmp" "$dst"
+    note "已升级 ${unit}.service（旧 ExecStart 指向 dispatch.sh；备份 $dst.pre-section.bak）"
   elif [ -f "$dst" ]; then
     warn "${unit}.service 已存在且内容不同，不覆盖（diff 如下，如需更新请手工合并):"
     diff -u "$dst" "$tmp" | sed 's/^/    /' || true
@@ -191,41 +202,126 @@ else
   bash -n "$DASH_DIR/service/dispatch.sh"
   note "service/dispatch.sh bash -n 语法校验通过"
 
+  # --launcher 必须在某个来源里真的存在对应 section：先扇描再开工，
+  # 避免“旧 conf 已改名 / 新 conf 已写”才发现参数无效、留下半完成态
+  if [ -n "$INITIAL_LAUNCHER" ]; then
+    found=0
+    for f in "$CONF" "$CONF_DIR"/models.d/*.conf "$SRC_DIR"/conf.sample \
+             "$SRC_DIR"/conf.sample.d/*.conf /etc/ai-server.conf; do
+      [ -f "$f" ] || continue
+      if grep -q "^\[${INITIAL_LAUNCHER}\]" "$f" \
+         || grep -qE "^(#[[:space:]]*)?LAUNCHER=${INITIAL_LAUNCHER}$" "$f"; then
+        found=1; break
+      fi
+    done
+    [ "$found" = 1 ] \
+      || die "--launcher $INITIAL_LAUNCHER 没有对应的 section（conf / models.d / conf.sample.d / 旧 conf 里都没有）"
+  fi
+
+  # 旧版（LAUNCHER 模式）配置自动迁移：/etc/ai-server.conf → section 配置
+  LEGACY_CONF=/etc/ai-server.conf
+  MIGRATED=0
+  if [ ! -f "$CONF" ] && [ -f "$LEGACY_CONF" ]; then
+    echo "==> 检测到旧版配置 $LEGACY_CONF（LAUNCHER 模式），迁移到 section 配置"
+    if python3 - "$LEGACY_CONF" "$SRC_DIR/conf.sample" "$CONF" "$CONF_DIR/models.d" "$LAUNCHERS_DIR" <<'EOF'
+import os, re, sys
+legacy, sample, conf, models_d, launchers = sys.argv[1:6]
+os.makedirs(models_d, exist_ok=True)
+names, default = [], None
+for line in open(legacy, errors="replace"):
+    s = line.strip()
+    m = re.match(r"^(#\s*)?LAUNCHER=([A-Za-z0-9._-]+)$", s)
+    if not m:
+        continue
+    name = m.group(2)
+    if name not in names:
+        names.append(name)
+    if default is None and not m.group(1):
+        default = name
+if not names:
+    sys.exit("旧 conf 里没找到 LAUNCHER 行")
+if not default:
+    default = names[0]
+with open(sample) as f:
+    text = f.read()
+text = re.sub(r"(?m)^default\s*=.*$", "default = %s" % default, text, count=1)
+with open(conf, "w") as f:
+    f.write(text)
+os.chmod(conf, 0o644)
+def q(v):
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+moved = 0
+for name in names:
+    script = os.path.join(launchers, name + ".sh")
+    if not os.path.isfile(script):
+        print("  跳过 %s：launcher 脚本不存在 %s" % (name, script))
+        continue
+    stype = "llama.cpp" if ("llama" in name.lower() or
+                            ("llama" in open(script, errors="replace").read().lower())) else "ninfer"
+    dst = os.path.join(models_d, name + ".conf")
+    with open(dst, "w") as f:
+        f.write("# 从旧版 launcher 脚本 %s 迁移而来（launcher 脚本本身就是启动入口）\n"
+                "# 要改成直连推理二进制：在管理页「启动参数」里改主程序路径\n"
+                "[%s]\nserver-type = %s\nexecute = %s\n" % (script, name, q(stype), q(script)))
+    os.chmod(dst, 0o644)
+    moved += 1
+    print("  已迁移 section: %s -> %s" % (name, dst))
+if not moved:
+    sys.exit("旧 conf 里的 LAUNCHER 均无对应脚本，无法迁移")
+os.rename(legacy, legacy + ".migrated")
+print("  旧 conf 已改名为 %s.migrated（不再被读取）" % legacy)
+print("  default = %s" % default)
+EOF
+    then
+      MIGRATED=1
+      note "旧配置迁移完成（原文件保留为 $LEGACY_CONF.migrated）"
+    else
+      warn "旧配置自动迁移失败，改用 conf.sample 生成新配置（旧文件 $LEGACY_CONF 原样保留）"
+    fi
+  fi
+
   # /etc/cortex-console/ai-server.conf（主文件，从 conf.sample 生成）+ models.d 示例 section
-  if [ -f "$CONF" ] && [ "$FORCE_CONF" = 0 ]; then
+  if [ -f "$CONF" ] && [ "$MIGRATED" = 0 ] && [ "$FORCE_CONF" = 0 ]; then
     info "跳过（已存在，--force-conf 可覆盖）: $CONF"
     [ -n "$INITIAL_LAUNCHER" ] && warn "--launcher $INITIAL_LAUNCHER 未生效（conf 已存在，需 --force-conf 覆盖）"
   else
-    [ -f "$CONF" ] && cp -f "$CONF" "$CONF.bak"
+    [ -f "$CONF" ] && [ "$MIGRATED" = 0 ] && cp -f "$CONF" "$CONF.bak"
     if [ ! -f "$SRC_DIR/conf.sample" ]; then
       die "仓库内找不到 conf.sample"
     fi
-    cp -f "$SRC_DIR/conf.sample" "$CONF"
-    if [ -n "$INITIAL_LAUNCHER" ]; then
-      sed -i "s/^default = .*/default = ${INITIAL_LAUNCHER}/" "$CONF"
-      grep -q "^default = ${INITIAL_LAUNCHER}$" "$CONF" \
-        || die "sed 改写 default 失败（conf.sample 格式可能变化）: $CONF"
+    if [ "$MIGRATED" = 0 ]; then
+      cp -f "$SRC_DIR/conf.sample" "$CONF"
+      chmod 644 "$CONF"
+      note "已生成 $CONF（默认 section: ${INITIAL_LAUNCHER:-example-ninfer}）"
     fi
-    chmod 644 "$CONF"
-    note "已生成 $CONF（默认 section: ${INITIAL_LAUNCHER:-example-ninfer}）"
   fi
-  # 示例 section 部署到 models.d/（已存在不覆盖）
-  for f in "$SRC_DIR"/conf.sample.d/*.conf; do
-    [ -f "$f" ] || continue
-    dst="$CONF_DIR/models.d/$(basename "$f")"
-    if [ -f "$dst" ]; then
-      info "跳过（已存在）: $dst"
-    else
-      cp -f "$f" "$dst"
-      chmod 644 "$dst"
-      note "已部署示例 section: $dst"
-    fi
-  done
+  # 示例 section 骨架部署到 models.d/（已存在不覆盖；旧配置迁移过则不塞示例）
+  if [ "$MIGRATED" = 0 ]; then
+    for f in "$SRC_DIR"/conf.sample.d/*.conf; do
+      [ -f "$f" ] || continue
+      dst="$CONF_DIR/models.d/$(basename "$f")"
+      if [ -f "$dst" ]; then
+        info "跳过（已存在）: $dst"
+      else
+        cp -f "$f" "$dst"
+        chmod 644 "$dst"
+        note "已部署示例 section: $dst"
+      fi
+    done
+  fi
   [ -d "$CONF_DIR/models.d" ] && note "models.d 目录就绪（每个后端一个 <name>.conf，自动 include）"
 
-  # systemd unit：ai-server 部分（仅 NO_AI=0）
+  # 统一把 default 设为 --launcher 指定的 section（新建/迁移两条路径都适用，幂等）
+  if [ -n "$INITIAL_LAUNCHER" ] && ! grep -q "^default = ${INITIAL_LAUNCHER}$" "$CONF"; then
+    sed -i "s/^default[[:space:]]*=.*/default = ${INITIAL_LAUNCHER}/" "$CONF"
+    grep -q "^default = ${INITIAL_LAUNCHER}$" "$CONF" \
+      || die "改写 default 失败（conf 格式可能变化）: $CONF"
+    note "default 设为 $INITIAL_LAUNCHER"
+  fi
+
+  # systemd unit：ai-server 部分（仅 NO_AI=0；旧版本 unit 自动升级）
   if [ "$have_systemd" = 1 ]; then
-    install_unit ai-server.service.in ai-server 1
+    install_unit ai-server.service.in ai-server 1 1
   fi
 fi
 
@@ -243,8 +339,17 @@ if [ "$have_systemd" = 1 ]; then
   if [ "$NO_AI" = 1 ]; then
     info "跳过 ai-server.service（--no-ai-server）"
   else
-    systemctl enable --now ai-server
-    note "ai-server.service 已启用并启动"
+    # 预检 default section（execute/model 路径真实存在）才 start：
+    # 否则 Restart=on-failure 会每 5s 重试刷日志，新机器装完就是 crash loop
+    if precheck_out="$(python3 "$DASH_DIR/service/ai_conf.py" check "$CONF" 2>&1)"; then
+      systemctl enable --now ai-server
+      note "ai-server.service 已启用并启动"
+    else
+      systemctl enable ai-server
+      warn "default section 配置无效，未启动 ai-server（否则会 crash loop 刷日志）"
+      warn "  预检: ${precheck_out}"
+      warn "  请在管理页「启动参数 → 编辑配置」填真实 execute/model 路径，再 systemctl start ai-server"
+    fi
   fi
 else
   warn "未检测到 systemd，跳过 unit 安装。手动启动方式:"

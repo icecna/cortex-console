@@ -670,7 +670,7 @@ async function refreshLauncher() {
 $("btn_launcher").onclick = async () => {
   const name = $("launcher_sel").value;
   if (!name || launcherBusy) return;
-  const msg = $("aic_msg");
+  const msg = $("svc_msg");   // 切换按钮在「服务控制」卡片，进度/结果也写在这里
   if (name === launcherCur) { msg.textContent = "已是当前后端，无需切换"; msg.className = "msg"; return; }
   if (!confirm("切换到后端 " + name + " 并重启服务？\n切换期间服务中断（约 1-2 分钟）。")) return;
   launcherBusy = true;
@@ -684,7 +684,7 @@ $("btn_launcher").onclick = async () => {
     msg.textContent = "已切换，等待服务启动…";
     msg.className = "msg ok";
     refreshLauncher();
-    loadParamSel();  // 后端变了：下拉框同步到新激活 section，表单重新拉取
+    loadParamSel(name);  // 后端变了：表单下拉框跟到新激活的 section（否则停在非激活项，保存并重启被禁用）
     let ready = false;
     for (let i = 0; i < 36; i++) {          // 最多轮询 3 分钟，等模型加载完
       await new Promise(r => setTimeout(r, 5000));

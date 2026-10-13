@@ -27,7 +27,7 @@ sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--dash-dir <path>` | `/mnt/models/cortex-console` | cortex-console 代码目录 |
-| `--launchers-dir <path>` | `/mnt/models/ai-launchers` | 辅助目录（mkdir 确保存在，如请求日志输出；ai-server 入口已移至 `$DASH_DIR/service/dispatch.sh`） |
+| `--launchers-dir <path>` | `/mnt/models/ai-launchers` | 辅助目录：旧版 launcher 脚本所在（升级时迁移成 section）、请求日志输出目录 |
 | `--launcher <name>` | 无 | 初始 `default` section（仅首次生成 conf 时生效） |
 | `--admin-password <pw>` | 随机生成 | 初始管理员密码（仅 `admin.json` 不存在时生效） |
 | `--force-conf` | 关 | 覆盖已存在的 `/etc/cortex-console/ai-server.conf`（覆盖前备份 `.bak`） |
@@ -68,9 +68,28 @@ sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 - 自动 `mkdir -p` 缺失目录（含 `/etc/cortex-console/models.d`）；`service/dispatch.sh` 安装后做 `bash -n` 语法校验
 - **不碰**：模型文件、NInfer 编译产物、`admin.json`、`cmd_history.json`
 - **首次生成的 conf 是示例**：`conf.sample` 里的 section（execute/model 路径）是占位，
-  装完在 admin 页"启动参数 → ai-server 配置"里改成真实路径，或新建 section 后"保存并重启"
+  装完在 admin 页"启动参数 → 编辑配置"里改成真实路径，或新建 section 后"保存并重启"
+- **default 无效则不 start ai-server**：安装末尾用 `service/ai_conf.py check` 预检
+  default section（execute/model 路径存在）；不通过则只 `enable` 不 `start`，
+  避免 `Restart=on-failure` 每 5s 重试刷日志（填好路径后手动 `systemctl start ai-server`）
 - conf 支持 `include /etc/cortex-console/models.d/*.conf`：额外模型放 `models.d/*.conf` 即可，
-  无需改主文件
+  无需改主文件；主文件里的同名 section **整体覆盖** include 里的（不是按字段合并）
+- `--launcher <name>` 会校验该 section 在 conf / `models.d/*.conf` 里真的存在，不存在直接退出
+
+## 从旧版（LAUNCHER 模式）升级
+
+旧版用 `/etc/ai-server.conf` 的 `LAUNCHER=<脚本名>` + `$LAUNCHERS_DIR/<name>.sh`。重跑
+`install.sh` 会自动完成迁移：
+
+1. 旧 conf 里出现过的每个 LAUNCHER（含注释行）→ 生成一个 section
+   `models.d/<name>.conf`（`execute` 指向原 launcher 脚本，`server-type` 按名字/脚本内容推断），
+   `default` 取旧 conf 里首个未注释的 LAUNCHER
+2. 旧 `/etc/ai-server.conf` 改名为 `/etc/ai-server.conf.migrated`（不再被读）
+3. 已存在的 `ai-server.service` 若 `ExecStart` 指向旧 `dispatch.sh` → 备份为
+   `.pre-section.bak` 后自动覆盖；用户自改过的 unit 仍只 diff 不碰
+4. 迁移失败（无 LAUNCHER 行 / 脚本都缺失）→ 回退到 `conf.sample` 生成新配置，旧文件原样保留
+
+launcher 脚本本身不动，因此升级后服务能继续跑；想改成直连推理二进制，在管理页改 `execute` 即可。
 
 ## 验证
 
@@ -108,6 +127,9 @@ sudo ./install.sh --uninstall --purge  # 连安装目录一起删
 
 - [ ] 完整安装后两个 unit 均 active，`:8090/api/status` 返回 200
 - [ ] admin 页可登录，后端切换一次再切回（default section 变更 + 服务重启），conf/服务/参数表单联动正常
+- [ ] 旧版升级：旧 conf 存留时重跑 `install.sh` → `models.d/` 生成同名 section、
+  旧 conf 改名 `.migrated`、unit 备份 `.pre-section.bak` 后升级，服务不中断
+- [ ] 新机器（只有示例 conf）：`ai-server` 不启动（只 enable），管理页填真实路径后手动 start
 
 ### 环境适配级
 
