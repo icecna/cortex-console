@@ -15,7 +15,7 @@ sudo ./install.sh --no-ai-server
 # 指定初始管理员密码
 sudo ./install.sh --admin-password 'MyStr0ngPass!'
 
-# 指定初始默认后端
+# 指定初始默认 section（conf 中的 section 名）
 sudo ./install.sh --launcher quasar
 
 # 自定义安装目录（默认 /mnt/models/cortex-console 和 /mnt/models/ai-launchers）
@@ -26,12 +26,12 @@ sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--dash-dir <path>` | `cortex-console 代码目录| cortex-console 代码目录 |
-| `--launchers-dir <path>` | `/mnt/models/ai-launchers` | launcher 脚本目录 |
-| `--launcher <name>` | 取现有 conf / 首个脚本 | 初始默认后端（仅首次生成 conf 时生效） |
+| `--dash-dir <path>` | `/mnt/models/cortex-console` | cortex-console 代码目录 |
+| `--launchers-dir <path>` | `/mnt/models/ai-launchers` | 辅助目录（mkdir 确保存在，如请求日志输出；ai-server 入口已移至 `$DASH_DIR/service/dispatch.sh`） |
+| `--launcher <name>` | 无 | 初始 `default` section（仅首次生成 conf 时生效） |
 | `--admin-password <pw>` | 随机生成 | 初始管理员密码（仅 `admin.json` 不存在时生效） |
-| `--force-conf` | 关 | 覆盖已存在的 `/etc/ai-server.conf`（覆盖前备份 `.bak`） |
-| `--no-ai-server` | 关 | 跳过 ai-server 相关（conf、launcher、unit） |
+| `--force-conf` | 关 | 覆盖已存在的 `/etc/cortex-console/ai-server.conf`（覆盖前备份 `.bak`） |
+| `--no-ai-server` | 关 | 跳过 ai-server 相关（conf、unit） |
 | `--uninstall` | 关 | 卸载：停服务、删 unit；**保留** conf、`admin.json`、日志 |
 | `--purge` | 关 | 与 `--uninstall` 连用，连安装目录一起删 |
 | `-h / --help` | | 帮助 |
@@ -42,9 +42,9 @@ sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 |---|---|---|
 | cortex-console 代码（`app.py` + 前端） | `$DASH_DIR` | 内容相同跳过，不同则覆盖 |
 | `cortex-console.service` | `/etc/systemd/system/` | 不覆盖，diff 提示 |
-| launcher 脚本 + `dispatch.sh` | `$LAUNCHERS_DIR` | 同上 |
+| `service/dispatch.sh`（ai-server 启动入口） | `$DASH_DIR/service/` | 随代码部署，内容相同跳过，不同则覆盖 |
 | `ai-server.service` | `/etc/systemd/system/` | 不覆盖，diff 提示 |
-| `/etc/ai-server.conf` | 同路径 | **绝不覆盖**（`--force-conf` 除外） |
+| `/etc/cortex-console/ai-server.conf`（从 `conf.sample` 生成） | 同路径 | **绝不覆盖**（`--force-conf` 除外） |
 | `admin.json` | `$DASH_DIR` | **绝不覆盖** |
 
 ## 管理员账号
@@ -65,19 +65,20 @@ sudo ./install.sh --dash-dir /opt/dash --launchers-dir /opt/launchers
 | 端口 80/8090 | 可选 | 被占用时警告（cortex-console 运行时自动跳过占用端口） |
 
 - 全程 `set -euo pipefail`，任一步失败立即退出并打印已完成步骤清单
-- 自动 `mkdir -p` 缺失目录；launcher 脚本安装后做 `bash -n` 语法校验
+- 自动 `mkdir -p` 缺失目录（含 `/etc/cortex-console/models.d`）；`service/dispatch.sh` 安装后做 `bash -n` 语法校验
 - **不碰**：模型文件、NInfer 编译产物、`admin.json`、`cmd_history.json`
-- **无 launcher 源时降级**：仓库内带 `dispatch.sh`，即使 `../ai-launchers` 不存在也会部署它；
-  首个 launcher 脚本可在管理页“ai-server 配置 → 新建 launcher”创建，之后重跑 `install.sh` 补齐 conf 和 unit
-- launcher 脚本内的机器相关路径（模型文件、二进制、host IP）原样复制，**装完按需修改**，改完在 admin 页"后端切换"或 `systemctl restart ai-server` 生效
+- **首次生成的 conf 是示例**：`conf.sample` 里的 section（execute/model 路径）是占位，
+  装完在 admin 页"启动参数 → ai-server 配置"里改成真实路径，或新建 section 后"保存并重启"
+- conf 支持 `include /etc/cortex-console/models.d/*.conf`：额外模型放 `models.d/*.conf` 即可，
+  无需改主文件
 
 ## 验证
 
 ```bash
 systemctl status cortex-console ai-server     # 均 active
-curl -s http://127.0.0.1:8090/api/status # 200 + JSON
+curl -s http://127.0.0.1:8090/api/status      # 200 + JSON
 # 浏览器打开 http://<ip>:80/admin 登录
-journalctl -u ai-server -f               # 推理服务启动日志
+journalctl -u ai-server -f                    # 推理服务启动日志
 ```
 
 ## 卸载
@@ -87,7 +88,7 @@ sudo ./install.sh --uninstall        # 停服务 + 删 unit，保留配置和日
 sudo ./install.sh --uninstall --purge  # 连安装目录一起删
 ```
 
-卸载保留清单：`/etc/ai-server.conf`、`$DASH_DIR/admin.json`、`$DASH_DIR/cmd_history.json`、journal 日志。
+卸载保留清单：`/etc/cortex-console/`（ai-server.conf + models.d）、`$DASH_DIR/admin.json`、`$DASH_DIR/cmd_history.json`、journal 日志。
 
 ## 测试方法
 
@@ -106,7 +107,7 @@ sudo ./install.sh --uninstall --purge  # 连安装目录一起删
 ### 集成级（真实环境）
 
 - [ ] 完整安装后两个 unit 均 active，`:8090/api/status` 返回 200
-- [ ] admin 页可登录，后端切换一次再切回，conf/服务/参数表单联动正常
+- [ ] admin 页可登录，后端切换一次再切回（default section 变更 + 服务重启），conf/服务/参数表单联动正常
 
 ### 环境适配级
 

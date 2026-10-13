@@ -5,7 +5,7 @@
 #   sudo ./install.sh                          # 完整安装（默认路径）
 #   sudo ./install.sh --no-ai-server           # 只装 Cortex Console（监控面板）
 #   sudo ./install.sh --admin-password 'xxx'   # 指定初始管理员密码
-#   sudo ./install.sh --launcher quasar        # 指定初始默认后端
+#   sudo ./install.sh --launcher quasar        # 指定初始默认 section（conf 中的 section 名）
 #   sudo ./install.sh --uninstall              # 卸载（保留配置/日志）
 #   sudo ./install.sh --uninstall --purge      # 连安装目录一起删
 #   ./install.sh --help
@@ -53,6 +53,9 @@ while [ $# -gt 0 ]; do
     *) die "未知参数: $1（--help 查看用法）" ;;
   esac
 done
+if [ -n "$INITIAL_LAUNCHER" ] && ! [[ "$INITIAL_LAUNCHER" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  die "非法 section 名: $INITIAL_LAUNCHER（仅允许字母/数字/._-，且以字母或数字开头）"
+fi
 
 # ---------- 通用检查 ----------
 command -v python3 >/dev/null || die "未找到 python3"
@@ -93,7 +96,7 @@ if [ "$UNINSTALL" = 1 ]; then
       fi
     done
   else
-    info "保留: /etc/ai-server.conf、$DASH_DIR/admin.json、cmd_history.json、journal 日志"
+    info "保留: /etc/cortex-console/（ai-server.conf + models.d）、$DASH_DIR/admin.json、cmd_history.json、journal 日志"
   fi
   echo "卸载完成"
   exit 0
@@ -115,14 +118,17 @@ fi
 # ---------- 部署 cortex-console 代码 ----------
 echo "==> 部署 cortex-console 到 $DASH_DIR"
 mkdir -p "$DASH_DIR"
+CODE_UPDATED=0
 for f in app.py index.html admin.html themes.html style.css themes.css \
-         dispatch.sh README.md INSTALL.md cortex-console.service.in ai-server.service.in; do
+         service/dispatch.sh README.md INSTALL.md cortex-console.service.in ai-server.service.in; do
   src="$SRC_DIR/$f" dst="$DASH_DIR/$f"
   [ -f "$src" ] || continue
   if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
     info "跳过（相同）: $f"
   else
+    mkdir -p "$(dirname "$dst")"
     cp -f "$src" "$dst"
+    CODE_UPDATED=1
     note "已部署: $f"
   fi
 done
@@ -152,154 +158,88 @@ EOF
   note "已生成 admin.json (scrypt 加盐哈希, 600)"
 fi
 
-# ---------- ai-server ----------
-SRC_LAUNCHERS="$SRC_DIR/../ai-launchers"
-if [ "$NO_AI" = 1 ]; then
-  info "--no-ai-server: 跳过 launcher / conf / ai-server.service"
-elif [ ! -d "$SRC_LAUNCHERS" ]; then
-  # 源目录缺失：若目标目录已有 dispatch.sh（就地升级场景）则用目标自身作源，
-  # 否则只部署仓库内的 dispatch.sh，首个 launcher 可在管理页“ai-server 配置”里新建
-  if [ -x "$LAUNCHERS_DIR/dispatch.sh" ]; then
-    SRC_LAUNCHERS="$LAUNCHERS_DIR"
-    warn "launcher 源目录不存在，改用已安装的 $LAUNCHERS_DIR 自身"
+# systemd unit 安装（$1=模板 $2=unit名 $3=是否安装）
+install_unit() {
+  local tpl="$1" unit="$2"
+  [ "${3:-0}" = 1 ] || return 0
+  local tmp; tmp="$(mktemp)"
+  sed -e "s|__DASH_DIR__|$DASH_DIR|g" \
+      -e "s|__LAUNCHERS_DIR__|$LAUNCHERS_DIR|g" \
+      -e "s|__WORK_DIR__|$(dirname "$LAUNCHERS_DIR")|g" \
+      "$SRC_DIR/$tpl" > "$tmp"
+  local dst="/etc/systemd/system/${unit}.service"
+  if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
+    info "跳过（相同）: ${unit}.service"
+  elif [ -f "$dst" ]; then
+    warn "${unit}.service 已存在且内容不同，不覆盖（diff 如下，如需更新请手工合并):"
+    diff -u "$dst" "$tmp" | sed 's/^/    /' || true
   else
-    mkdir -p "$LAUNCHERS_DIR"
-    if [ -f "$SRC_DIR/dispatch.sh" ]; then
-      cp -f "$SRC_DIR/dispatch.sh" "$LAUNCHERS_DIR/dispatch.sh"
-      chmod +x "$LAUNCHERS_DIR/dispatch.sh"
-      note "已部署 dispatch.sh（无 launcher 源，首个 launcher 请在管理页新建）"
-    fi
-    warn "launcher 源目录不存在（$SRC_LAUNCHERS），跳过 conf / ai-server.service"
-    NO_AI=1
+    cp -f "$tmp" "$dst"
+    note "已安装 ${unit}.service"
   fi
-fi
-if [ "$NO_AI" = 1 ]; then
-  :  # 已在上方输出说明
-else
-  echo "==> 部署 launcher 到 $LAUNCHERS_DIR"
-  mkdir -p "$LAUNCHERS_DIR"
-  for f in "$SRC_LAUNCHERS"/*.sh "$SRC_LAUNCHERS"/README.md; do
-    [ -f "$f" ] || continue
-    dst="$LAUNCHERS_DIR/$(basename "$f")"
-    if [ -f "$dst" ] && cmp -s "$f" "$dst"; then
-      info "跳过（相同）: $(basename "$f")"
-    else
-      cp -f "$f" "$dst"
-      [ "${f##*.}" = sh ] && chmod +x "$dst"
-      note "已部署: $(basename "$f")"
-    fi
-  done
-  [ -x "$LAUNCHERS_DIR/dispatch.sh" ] || die "dispatch.sh 缺失或不可执行"
-  for f in "$LAUNCHERS_DIR"/*.sh; do bash -n "$f"; done
-  note "launcher 脚本 bash -n 语法校验通过"
+  rm -f "$tmp"
+}
 
-  # /etc/ai-server.conf
-  if [ -n "$INITIAL_LAUNCHER" ]; then
-    [ -f "$SRC_LAUNCHERS/${INITIAL_LAUNCHER}.sh" ] \
-      || die "launcher 脚本不存在: ${INITIAL_LAUNCHER}.sh"
-  else
-    # 未指定默认后端：取排序后的第一个脚本，保证新装即可用
-    INITIAL_LAUNCHER="$(for f in "$SRC_LAUNCHERS"/*.sh; do
-      [ "$(basename "$f")" = dispatch.sh ] && continue
-      basename "$f" .sh
-    done | sort | head -1)"
-    [ -n "$INITIAL_LAUNCHER" ] || die "launcher 目录为空，无法确定默认后端"
-    info "未指定 --launcher，默认使用: $INITIAL_LAUNCHER"
-  fi
-  CONF=/etc/ai-server.conf
-  gen_conf() {
-    {
-      echo "# /etc/ai-server.conf — AI Server 后端选择"
-      echo "#"
-      echo "# 用法:"
-      echo "#   1. 修改下方 LAUNCHER 值（只保留一个有效行，另一行注释掉）"
-      echo "#   2. systemctl restart ai-server"
-      echo "#"
-      echo "# 可选值:"
-      local name
-      for f in "$LAUNCHERS_DIR"/*.sh; do
-        [ "$(basename "$f")" = dispatch.sh ] && continue
-        name="$(basename "$f" .sh)"
-        case "$name" in
-          ninfer-v100-duo)      echo "#   $name   NInfer V100 Duo (TP2, MTP, 端口 8080)" ;;
-          ninfer-v100x2)        echo "#   $name   NInfer V100X2 (TP2, NVFP4, MTP3, 端口 8080)" ;;
-          ninfer-v100x2-dflash) echo "#   $name   NInfer V100X2 (TP2, NVFP4, DFlash2x7, 98304 capacity, 端口 8080)" ;;
-          quasar)               echo "#   $name   NInfer V100X2 QUASAR 模型 (TP2, NVFP4, MTP3, 端口 8080)" ;;
-          llama-server)         echo "#   $name   llama.cpp (TP2, MTP, 端口 8080)" ;;
-          *)                    echo "#   $name" ;;
-        esac
-      done
-      echo ""
-      for f in "$LAUNCHERS_DIR"/*.sh; do
-        [ "$(basename "$f")" = dispatch.sh ] && continue
-        name="$(basename "$f" .sh)"
-        if [ "$name" = "$INITIAL_LAUNCHER" ]; then
-          echo "LAUNCHER=$name"
-        else
-          echo "#LAUNCHER=$name"
-        fi
-      done
-    }
-  }
+# ---------- ai-server ----------
+CONF_DIR=/etc/cortex-console
+CONF="$CONF_DIR/ai-server.conf"
+if [ "$NO_AI" = 1 ]; then
+  info "--no-ai-server: 跳过 conf / ai-server.service"
+else
+  echo "==> 部署后端配置"
+  mkdir -p "$LAUNCHERS_DIR" "$CONF_DIR/models.d"
+  bash -n "$DASH_DIR/service/dispatch.sh"
+  note "service/dispatch.sh bash -n 语法校验通过"
+
+  # /etc/cortex-console/ai-server.conf（主文件，从 conf.sample 生成）+ models.d 示例 section
   if [ -f "$CONF" ] && [ "$FORCE_CONF" = 0 ]; then
     info "跳过（已存在，--force-conf 可覆盖）: $CONF"
+    [ -n "$INITIAL_LAUNCHER" ] && warn "--launcher $INITIAL_LAUNCHER 未生效（conf 已存在，需 --force-conf 覆盖）"
   else
     [ -f "$CONF" ] && cp -f "$CONF" "$CONF.bak"
-    gen_conf > "$CONF"
-    note "已生成 $CONF$([ -n "$INITIAL_LAUNCHER" ] && echo "（默认后端: $INITIAL_LAUNCHER）")"
+    if [ ! -f "$SRC_DIR/conf.sample" ]; then
+      die "仓库内找不到 conf.sample"
+    fi
+    cp -f "$SRC_DIR/conf.sample" "$CONF"
+    if [ -n "$INITIAL_LAUNCHER" ]; then
+      sed -i "s/^default = .*/default = ${INITIAL_LAUNCHER}/" "$CONF"
+      grep -q "^default = ${INITIAL_LAUNCHER}$" "$CONF" \
+        || die "sed 改写 default 失败（conf.sample 格式可能变化）: $CONF"
+    fi
+    chmod 644 "$CONF"
+    note "已生成 $CONF（默认 section: ${INITIAL_LAUNCHER:-example-ninfer}）"
   fi
+  # 示例 section 部署到 models.d/（已存在不覆盖）
+  for f in "$SRC_DIR"/conf.sample.d/*.conf; do
+    [ -f "$f" ] || continue
+    dst="$CONF_DIR/models.d/$(basename "$f")"
+    if [ -f "$dst" ]; then
+      info "跳过（已存在）: $dst"
+    else
+      cp -f "$f" "$dst"
+      chmod 644 "$dst"
+      note "已部署示例 section: $dst"
+    fi
+  done
+  [ -d "$CONF_DIR/models.d" ] && note "models.d 目录就绪（每个后端一个 <name>.conf，自动 include）"
 
   # systemd unit：ai-server 部分（仅 NO_AI=0）
   if [ "$have_systemd" = 1 ]; then
-    install_unit() {  # $1=模板 $2=unit名 $3=是否安装
-      local tpl="$1" unit="$2"
-      [ "$3" = 1 ] || return 0
-      local tmp; tmp="$(mktemp)"
-      sed -e "s|__DASH_DIR__|$DASH_DIR|g" \
-          -e "s|__LAUNCHERS_DIR__|$LAUNCHERS_DIR|g" \
-          -e "s|__WORK_DIR__|$(dirname "$LAUNCHERS_DIR")|g" \
-          "$SRC_DIR/$tpl" > "$tmp"
-      local dst="/etc/systemd/system/${unit}.service"
-      if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
-        info "跳过（相同）: ${unit}.service"
-      elif [ -f "$dst" ]; then
-        warn "${unit}.service 已存在且内容不同，不覆盖（diff 如下，如需更新请手工合并):"
-        diff -u "$dst" "$tmp" | sed 's/^/    /' || true
-      else
-        cp -f "$tmp" "$dst"
-        note "已安装 ${unit}.service"
-      fi
-      rm -f "$tmp"
-    }
     install_unit ai-server.service.in ai-server 1
   fi
 fi
 
 # ---------- systemd unit：cortex-console（始终安装） ----------
 if [ "$have_systemd" = 1 ]; then
-  install_unit() {  # 同上，重新定义作用域
-    local tpl="$1" unit="$2"
-    local tmp; tmp="$(mktemp)"
-    sed -e "s|__DASH_DIR__|$DASH_DIR|g" \
-        -e "s|__LAUNCHERS_DIR__|$LAUNCHERS_DIR|g" \
-        -e "s|__WORK_DIR__|$(dirname "$LAUNCHERS_DIR")|g" \
-        "$SRC_DIR/$tpl" > "$tmp"
-    local dst="/etc/systemd/system/${unit}.service"
-    if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
-      info "跳过（相同）: ${unit}.service"
-    elif [ -f "$dst" ]; then
-      warn "${unit}.service 已存在且内容不同，不覆盖（diff 如下，如需更新请手工合并):"
-      diff -u "$dst" "$tmp" | sed 's/^/    /' || true
-    else
-      cp -f "$tmp" "$dst"
-      note "已安装 ${unit}.service"
-    fi
-    rm -f "$tmp"
-  }
-  install_unit cortex-console.service.in cortex-console
+  install_unit cortex-console.service.in cortex-console 1
   systemctl daemon-reload
   systemctl enable --now cortex-console
   note "cortex-console.service 已启用并启动"
+  # 代码有更新且服务在运行 → 重启加载新代码（否则重跑安装后仍是旧代码）
+  if [ "$CODE_UPDATED" = 1 ] && systemctl is-active --quiet cortex-console; then
+    systemctl restart cortex-console
+    note "代码有更新，cortex-console 已重启以加载新代码"
+  fi
   if [ "$NO_AI" = 1 ]; then
     info "跳过 ai-server.service（--no-ai-server）"
   else
@@ -309,7 +249,8 @@ if [ "$have_systemd" = 1 ]; then
 else
   warn "未检测到 systemd，跳过 unit 安装。手动启动方式:"
   echo "    cd $DASH_DIR && nohup python3 app.py > /var/log/cortex-console.log 2>&1 &"
-  [ "$NO_AI" = 1 ] || echo "    $LAUNCHERS_DIR/dispatch.sh &"
+  [ "$NO_AI" = 1 ] || echo "    $DASH_DIR/service/dispatch.sh &"
+  [ "$CODE_UPDATED" = 1 ] && warn "代码有更新，请手动重启 cortex-console 进程以加载新代码"
 fi
 
 # ---------- 完成 ----------

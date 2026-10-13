@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import select
+import shlex
 import subprocess
 import threading
 import time
@@ -126,7 +127,8 @@ def llama_base():
     backend, pid, _ = detect_service()
     cmd = _proc_cmdline(pid)
     if cmd is None and backend is None:
-        cmd = _read_unit_cmd()  # llama-server 未运行回退；ninfer 未运行用默认地址
+        _, sec = _active_section()  # 服务未运行回退 conf 激活 section
+        cmd = _sec_cmdline(sec) or None
     if cmd:
         h = _last_flag(cmd, "--host")
         if h and h not in ("0.0.0.0", "::", "[::]"):
@@ -488,7 +490,7 @@ _llama_prev = None
 _gen_hold = None  # (tps, ts) 最近一次非零生成速度，用于结束后短暂保留显示
 
 def llama_metrics():
-    backend, _, _ = detect_service()
+    backend, pid, _ = detect_service()
     if backend == "ninfer":
         return ninfer_metrics()
     return _llama_metrics()
@@ -1131,7 +1133,7 @@ def sampler():
 ADMIN_FILE = os.path.join(BASE, "admin.json")
 TOKEN_TTL = 12 * 3600   # 登录 token 有效期 12 小时
 _tokens = {}            # token -> 过期时间戳
-_login_fail_ts = []     # 失败登录时间戳（限流用）
+_login_fail = {}        # 来源 IP -> 失败登录时间戳（按 IP 限流，避免单点攻击锁死所有管理员）
 
 def _scrypt(pw, salt):
     return hashlib.scrypt(pw.encode(), salt=salt.encode(), n=2 ** 14, r=8, p=1).hex()
@@ -1149,18 +1151,22 @@ def _check_password(pw):
         return False
     return secrets.compare_digest(_scrypt(pw, a["salt"]), a["hash"])
 
-def admin_login(pw):
-    """成功返回 (token, None)，失败返回 (None, 错误信息)。"""
+def admin_login(pw, ip="unknown"):
+    """成功返回 (token, None)，失败返回 (None, 错误信息)。按来源 IP 限流 5 次/60s。"""
     now = time.time()
-    # 顺手清理过期 token，避免残留
+    # 顺手清理过期 token 和 60s 无活动的失败 IP，避免内存残留
     for t in [t for t, exp in _tokens.items() if now > exp]:
         _tokens.pop(t, None)
-    _login_fail_ts[:] = [t for t in _login_fail_ts if now - t < 60]
-    if len(_login_fail_ts) >= 5:
+    for _ip in [ip for ip, ts in _login_fail.items() if not ts or now - ts[-1] >= 60]:
+        _login_fail.pop(_ip, None)
+    fails = _login_fail.setdefault(ip, [])
+    fails[:] = [t for t in fails if now - t < 60]
+    if len(fails) >= 5:
         return None, "失败次数过多，60 秒后再试"
     if not _check_password(pw):
-        _login_fail_ts.append(now)
+        fails.append(now)
         return None, "密码错误"
+    _login_fail.pop(ip, None)
     tok = secrets.token_hex(16)
     _tokens[tok] = now + TOKEN_TTL
     return tok, None
@@ -1176,6 +1182,7 @@ def change_password(old, new):
         json.dump({"salt": salt, "hash": _scrypt(new, salt)}, f)
     os.chmod(tmp, 0o600)
     os.replace(tmp, ADMIN_FILE)
+    _tokens.clear()  # 改密后吊销所有已发 token，旧 token 立即失效
     return None
 
 def _ctrl_unit():
@@ -1213,204 +1220,340 @@ def service_action(action):
             "error": r.stderr.strip() or None,
             "state": info}
 
-AI_SERVER_CONF = "/etc/ai-server.conf"
-AI_LAUNCHERS_DIR = "/mnt/models/ai-launchers"
-_launcher_lock = threading.Lock()  # 防止并发切换时读-改-写交叉
+# ---------------- 后端配置（/etc/cortex-console/ai-server.conf） ----------------
+# 单一 conf：default 指向激活 section；每个 section = execute/model/model_flag/env/cmdline。
+# dispatch.sh 与 dashboard 共用同一套解析逻辑（parse_ai_conf）。
+AI_SERVER_CONF = "/etc/cortex-console/ai-server.conf"
+AI_CONF_DIR = "/etc/cortex-console"
+AI_MODELS_D = os.path.join(AI_CONF_DIR, "models.d")
+_launcher_lock = threading.Lock()  # 防止并发编辑 conf 时读-改-写交叉
 
-def launcher_info():
-    """解析 conf 中当前 LAUNCHER，并扫描 launcher 脚本目录枚举可选后端。
 
-    说明文字来自 conf 顶部的注释行（格式：#   <name>   <描述>）。
-    当前值取第一个未注释行，与 dispatch.sh（head -1）语义一致。
-    """
-    cur = ""
-    descs = {}
+def parse_ai_conf(path=None):
+    """解析 ai-server.conf（INI 风格 + include glob）。
+    返回 {"default": name|None, "sections": {name: {execute, model, model_flag, env, cmdline}}}。
+    主文件 section 覆盖 include 同名 section；default 只取主文件第一个 default 行。"""
+    path = path or AI_SERVER_CONF
+    seen = set()
+    def _unquote(v):
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1]:
+            if v[0] == '"':
+                v = v[1:-1]
+                out, i = [], 0
+                while i < len(v):
+                    if v[i] == "\\" and i + 1 < len(v):
+                        out.append(v[i + 1]); i += 2
+                    else:
+                        out.append(v[i]); i += 1
+                v = "".join(out)
+            elif v[0] == "'":
+                v = v[1:-1]
+        return v
+    def collect(p):
+        secs = {}
+        real = os.path.realpath(p)
+        if real in seen:
+            return secs
+        seen.add(real)
+        try:
+            with open(p) as f:
+                lines = [l.strip() for l in f]
+        except OSError:
+            return secs
+        for line in lines:  # 先 include（本文件 section 优先）
+            if line.lower().startswith("include "):
+                for inc in sorted(glob.glob(line[8:].strip())):
+                    secs.update(collect(inc))
+        cur = None
+        for line in lines:
+            if not line or line[0] in "#;":
+                continue
+            if line.lower().startswith("include "):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                cur = line[1:-1].strip()
+                secs.setdefault(cur, {})
+                continue
+            if cur is None or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            secs[cur][k.strip()] = _unquote(v)
+        return secs
+    sections = collect(path)
+    default = None
     try:
-        with open(AI_SERVER_CONF) as f:
+        with open(path) as f:
             for line in f:
-                m = re.match(r"^LAUNCHER\s*=\s*(\S+)", line)
-                if m:
-                    if not cur:  # 首行生效，后续未注释行忽略（与 dispatch.sh 一致）
-                        cur = m.group(1)
-                else:
-                    m = re.match(r"^#\s{2,}(\S+)\s+(.*)", line)
-                    if m and m.group(1) not in descs:
-                        descs[m.group(1)] = m.group(2).strip()
+                line = line.strip()
+                if not line or line[0] in "#;":
+                    continue
+                if line.lower().startswith("default"):
+                    if "=" in line:
+                        default = _unquote(line.split("=", 1)[1])
+                    break
     except OSError:
         pass
-    options = []
-    try:
-        for fn in sorted(os.listdir(AI_LAUNCHERS_DIR)):
-            if fn.endswith(".sh") and fn != "dispatch.sh":
-                name = fn[:-3]
-                options.append({"name": name, "desc": descs.get(name, ""),
-                                "current": name == cur})
-    except OSError:
-        pass
-    return {"current": cur, "options": options}
+    return {"default": default, "sections": sections}
 
-def launcher_switch(name):
-    """改写 conf 的 LAUNCHER 行（自动备份 .bak，原子替换），再重启 ai-server。"""
-    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", name):
-        return {"ok": False, "error": "非法 launcher 名: %s" % name}
-    target = os.path.join(AI_LAUNCHERS_DIR, name + ".sh")
-    if not (os.path.isfile(target) and os.access(target, os.X_OK)):
-        return {"ok": False, "error": "launcher 脚本不存在或不可执行: %s" % name}
-    with _launcher_lock:
+
+def _sec_backend(sec):
+    """后端类型（llama / ninfer / None）。优先读 section 的 server-type
+    （"ninfer" / "llama.cpp"），缺失时回退按 execute 文件名推断。"""
+    st = (sec.get("server-type") or "").strip().lower()
+    if st:
+        if st.startswith("ninfer"):
+            return "ninfer"
+        if "llama" in st:
+            return "llama"
+    exe = os.path.basename((sec.get("execute") or "").strip())
+    if "llama" in exe:
+        return "llama"
+    if "ninfer" in exe:
+        return "ninfer"
+    return None
+
+
+def _cmd_q(t):
+    """shell 安全化：token 含特殊字符（引号/空格等）时用 shlex.quote 包裹。"""
+    q = shlex.quote(t)
+    return q if q != t else t
+
+def _sec_to_cmdline_str(sec):
+    """section → 完整命令字符串（execute + [model_flag] model + cmdline），供 parse_cmd 用。"""
+    parts = [sec.get("execute", "")]
+    model = sec.get("model", "")
+    if model:
+        flag = sec.get("model_flag", "")
+        if flag:
+            parts.append(flag + model if flag.endswith("=") else flag)
+            if not flag.endswith("="):
+                parts.append(model)
+        else:
+            parts.append(model)
+    parts += shlex.split(sec.get("cmdline", ""))
+    return " ".join(_cmd_q(p) for p in parts if p)
+
+
+_sec_cmdline = _sec_to_cmdline_str  # 别名（llama_base/cmd_diff 用）
+
+
+def _cmdline_str_to_sec(cmd):
+    """完整命令字符串 → section dict（拆出 execute/model/model_flag/cmdline）。
+    用于 llama 表单：buildCmd 输出含 -m model 的完整命令。"""
+    tokens = shlex.split(cmd or "")
+    if not tokens:
+        return {}
+    sec = {"execute": tokens[0], "model": "", "model_flag": "", "cmdline": ""}
+    rest = tokens[1:]
+    for i, t in enumerate(rest):
+        if t == "-m":
+            sec["model_flag"] = "-m"
+            sec["model"] = rest[i + 1] if i + 1 < len(rest) else ""
+            rest = rest[:i] + rest[i + 2:]
+            break
+    if not sec["model"]:  # 位置参数（第一个非 flag token）
+        for i, t in enumerate(rest):
+            if not t.startswith("-"):
+                sec["model"] = rest[i]
+                rest = rest[:i] + rest[i + 1:]
+                break
+    sec["cmdline"] = " ".join(_cmd_q(t) for t in rest)
+    return sec
+
+
+def _conf_quote(v):
+    v = (v or "").strip()
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _conf_write_atomic(text):
+    """备份 .bak + 临时文件 + os.replace 原子替换 conf。"""
+    if os.path.isfile(AI_SERVER_CONF):
         try:
             with open(AI_SERVER_CONF) as f:
-                lines = f.read().splitlines()
-        except OSError as e:
-            return {"ok": False, "error": "读取配置失败: %s" % e}
-        new_lines = []
-        matched = False
-        for line in lines:
-            m = re.match(r"^\s*#?\s*LAUNCHER\s*=\s*(\S+)", line)
-            if m:  # 只改 LAUNCHER 行：目标行去注释，其余行加注释，保持原文件风格
-                matched = True
-                new_lines.append(("LAUNCHER=%s" if m.group(1) == name else "#LAUNCHER=%s") % m.group(1))
-            else:
-                new_lines.append(line)
-        if not matched:  # conf 中没有任何 LAUNCHER 行（新增后端未登记）：追加到末尾
-            new_lines.append("LAUNCHER=%s" % name)
-        # 先备份，再写临时文件 + os.replace 原子替换，避免写一半崩溃损坏 conf
-        with open(AI_SERVER_CONF + ".bak", "w") as f:
-            f.write("\n".join(lines) + "\n")
-        tmp = AI_SERVER_CONF + ".tmp"
-        with open(tmp, "w") as f:
-            f.write("\n".join(new_lines) + "\n")
-        os.replace(tmp, AI_SERVER_CONF)
+                with open(AI_SERVER_CONF + ".bak", "w") as f2:
+                    f2.write(f.read())
+        except OSError:
+            pass
+    tmp = AI_SERVER_CONF + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text if text.endswith("\n") else text + "\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, AI_SERVER_CONF)
+
+
+def _conf_set_default(name):
+    """改写 conf 的 default 行（保留其他内容）。返回错误串或 None。"""
     try:
-        r = subprocess.run(["systemctl", "restart", "ai-server"],
+        with open(AI_SERVER_CONF) as f:
+            lines = f.read().splitlines()
+    except OSError as e:
+        return "无法读取配置: %s" % e
+    out, replaced = [], False
+    for line in lines:
+        s = line.strip()
+        if s and s[0] not in "#;" and s.lower().startswith("default") and "=" in s:
+            out.append("default = %s" % name)
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        out.insert(0, "default = %s" % name)
+    _conf_write_atomic("\n".join(out))
+    return None
+
+
+def _sec_file(name):
+    """section 独立配置文件路径：/etc/cortex-console/models.d/<name>.conf。"""
+    return os.path.join(AI_MODELS_D, name + ".conf")
+
+
+def _write_sec_file(name, sec, comment=None):
+    """把单个 section 原子写入 models.d/<name>.conf。
+    sec: {key: value}；空值的 model_flag/env 省略（缺失 = 位置参数/无环境变量）。"""
+    lines = []
+    if comment:
+        lines.append("# " + comment)
+    lines.append("[%s]" % name)
+    for k in ("server-type", "execute", "model", "model_flag", "env", "cmdline"):
+        v = (sec.get(k) or "").strip()
+        if k in ("model_flag", "env") and not v:
+            continue
+        lines.append("%s = %s" % (k, _conf_quote(v)))
+    text = "\n".join(lines) + "\n"
+    tmp = _sec_file(name) + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, _sec_file(name))
+
+
+def _active_section():
+    """返回 (default section 名, section dict)；default 无效时 (name, {})。"""
+    conf = parse_ai_conf()
+    name = conf["default"]
+    sec = conf["sections"].get(name, {}) if name else {}
+    return (name, sec)
+
+
+def running_section():
+    """当前实际运行的 section 名：用运行进程 cmdline 首 token（execute 路径）
+    与各 section 的 execute 匹配。服务未运行/无法匹配返回 None。"""
+    _, pid, _ = detect_service()
+    if pid is None:
+        return None
+    cmd = _proc_cmdline(pid) or ""
+    exe = cmd.split()[0] if cmd.split() else ""
+    if not exe:
+        return None
+    try:
+        real = os.path.realpath(exe)
+    except OSError:
+        real = exe
+    for name, sec in parse_ai_conf()["sections"].items():
+        s_exe = (sec.get("execute") or "").strip()
+        if not s_exe:
+            continue
+        try:
+            if os.path.realpath(s_exe) == real:
+                return name
+        except OSError:
+            if s_exe == exe:
+                return name
+    return None
+
+
+def launcher_info():
+    """枚举 conf 中所有 section：current = default（配置），running = 实际运行进程。"""
+    conf = parse_ai_conf()
+    cur = conf["default"] or ""
+    run = running_section()
+    options = [{"name": n, "current": n == cur, "running": n == run}
+               for n in sorted(conf["sections"])]
+    return {"current": cur, "running": run, "options": options}
+
+
+def launcher_switch(name):
+    """校验 section 存在且 execute 可执行 → 改写 default 行 → 重启 ai-server。"""
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", name):
+        return {"ok": False, "error": "非法 section 名: %s" % name}
+    conf = parse_ai_conf()
+    sec = conf["sections"].get(name)
+    if not sec:
+        return {"ok": False, "error": "section 不存在: %s" % name}
+    exe = (sec.get("execute") or "").strip()
+    if not exe or not os.path.isfile(exe):
+        return {"ok": False, "error": "execute 不存在: %s" % exe}
+    with _launcher_lock:
+        err = _conf_set_default(name)
+        if err:
+            return {"ok": False, "error": err}
+    try:
+        r = subprocess.run(["systemctl", "restart", _ctrl_unit()],
                            capture_output=True, text=True, timeout=180)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "重启超时（180s），配置已切换为 %s，请手动检查: systemctl status ai-server" % name}
-    time.sleep(2)  # 等状态落定再读
-    info = service_info()
-    return {"ok": r.returncode == 0,
-            "error": r.stderr.strip() or None,
-            "launcher": name,
-            "state": info}
-
-def _ai_conf_text():
-    try:
-        with open(AI_SERVER_CONF) as f:
-            return f.read()
-    except OSError:
-        return ""
-
-def _ai_conf_current(conf_text):
-    """取第一个未注释 LAUNCHER 行（与 dispatch.sh 语义一致）。"""
-    for line in conf_text.splitlines():
-        m = re.match(r"^LAUNCHER\s*=\s*(\S+)", line)
-        if m:
-            return m.group(1)
-    return ""
-
-def _atomic_write(path, text, mode=None):
-    """备份旧内容到 .bak，临时文件 + os.replace 原子替换。"""
-    if os.path.isfile(path):
-        with open(path) as f:
-            old = f.read()
-        with open(path + ".bak", "w") as f:
-            f.write(old)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(text)
-    if mode is not None:
-        os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    time.sleep(2)
+    return {"ok": r.returncode == 0, "error": r.stderr.strip() or None,
+            "launcher": name, "state": service_info()}
 
 def ai_conf_info():
-    """conf 全文 + 当前 launcher 脚本全文（管理页“ai-server 配置”卡片用）。"""
-    conf = _ai_conf_text()
-    cur = _ai_conf_current(conf)
-    script = ""
-    script_path = None
-    if cur:
-        p = os.path.join(AI_LAUNCHERS_DIR, cur + ".sh")
-        if os.path.isfile(p):
-            script_path = p
-            try:
-                with open(p) as f:
-                    script = f.read()
-            except OSError:
-                pass
-    return {"conf": conf, "current": cur, "script": script, "script_path": script_path}
+    """conf 全文 + 当前 section 名 + 当前 section 渲染出的完整命令（管理页“AI Server 配置”卡片用）。"""
+    conf = ""
+    try:
+        with open(AI_SERVER_CONF) as f:
+            conf = f.read()
+    except OSError:
+        pass
+    name, sec = _active_section()
+    return {"conf": conf, "current": name or "",
+            "cmd": _sec_to_cmdline_str(sec) if sec else ""}
 
-def ai_conf_save(conf_text=None, script_text=None, restart=False):
-    """保存 conf 和/或当前 launcher 脚本（各自独立校验，原子写 + 备份），可选重启。"""
-    saved = []
+SERVER_TYPES = ("ninfer", "llama.cpp")
+
+def launcher_create(name, server_type):
+    """在 models.d/ 下新建一个 section 骨架（name 需合法且未占用）。
+    不改 default：创建 ≠ 激活，激活走「后端切换」（有 execute 校验 + 重启）。"""
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", name):
+        return {"ok": False, "error": "非法 section 名: %s" % name}
+    if server_type not in SERVER_TYPES:
+        return {"ok": False, "error": "非法 server-type: %s（可选 %s）" % (server_type, " / ".join(SERVER_TYPES))}
+    conf = parse_ai_conf()
+    if name in conf["sections"]:
+        return {"ok": False, "error": "section 已存在: %s" % name}
     with _launcher_lock:
-        if conf_text is not None:
-            cur = ""
-            for line in conf_text.splitlines():
-                m = re.match(r"^LAUNCHER\s*=\s*(\S+)", line)
-                if m:
-                    if cur:
-                        return {"ok": False, "error": "conf 中未注释的 LAUNCHER 行必须恰好一行"}
-                    cur = m.group(1)
-            if not cur:
-                return {"ok": False, "error": "conf 中必须有一行未注释的 LAUNCHER="}
-            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", cur):
-                return {"ok": False, "error": "LAUNCHER 值非法: %s" % cur}
-            target = os.path.join(AI_LAUNCHERS_DIR, cur + ".sh")
-            if not (os.path.isfile(target) and os.access(target, os.X_OK)):
-                return {"ok": False, "error": "LAUNCHER 指向的脚本不存在或不可执行: %s.sh（请先新建该 launcher）" % cur}
-            _atomic_write(AI_SERVER_CONF, conf_text)
-            saved.append("conf")
-        if script_text is not None:
-            if not script_text.strip():
-                return {"ok": False, "error": "脚本内容不能为空"}
-            cur = _ai_conf_current(_ai_conf_text())
-            if not cur:
-                return {"ok": False, "error": "conf 中没有有效 LAUNCHER，无法确定保存哪个脚本"}
-            path = os.path.join(AI_LAUNCHERS_DIR, cur + ".sh")
-            if not os.path.isfile(path):
-                return {"ok": False, "error": "脚本不存在: %s" % path}
-            # bash -n 语法检查（在临时文件上做，不碰原文件）
-            chk = path + ".syntax"
-            with open(chk, "w") as f:
-                f.write(script_text)
-            r = subprocess.run(["bash", "-n", chk], capture_output=True, text=True, timeout=10)
-            os.unlink(chk)
-            if r.returncode != 0:
-                err = (r.stderr.strip().splitlines() or ["语法错误"])[-1]
-                return {"ok": False, "error": "bash 语法检查失败: %s" % err}
-            _atomic_write(path, script_text, mode=0o755)
-            saved.append("脚本 %s.sh" % cur)
-    if restart:
         try:
-            r = subprocess.run(["systemctl", "restart", "ai-server"],
-                               capture_output=True, text=True, timeout=180)
-            time.sleep(2)
-            state = service_info()
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "saved": saved,
-                    "error": "重启超时（180s），配置已保存，请手动检查: systemctl status ai-server"}
-        if r.returncode != 0:
-            return {"ok": False, "saved": saved, "error": r.stderr.strip() or "重启失败"}
-    return {"ok": True, "saved": saved, "state": service_info() if restart else None}
+            _write_sec_file(name, {
+                "server-type": server_type,
+                "execute": "/path/to/server",
+                "model": "/path/to/model",
+                "cmdline": "--port 8080",
+            }, comment="骨架配置：先在管理页「启动参数」填真实 execute/model 路径，再用「服务控制 → 后端切换」激活")
+        except OSError as e:
+            return {"ok": False, "error": "写入 %s 失败: %s" % (_sec_file(name), e)}
+    return {"ok": True, "name": name}
 
-def launcher_create(name):
-    """新建 launcher 骨架脚本（可执行），之后在管理页编辑内容。"""
-    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", name):
-        return {"ok": False, "error": "非法 launcher 名: %s" % name}
-    path = os.path.join(AI_LAUNCHERS_DIR, name + ".sh")
-    if os.path.exists(path):
-        return {"ok": False, "error": "已存在: %s.sh" % name}
-    skeleton = """#!/usr/bin/env bash
-set -euo pipefail
-
-# TODO: 替换为实际启动命令（前台运行，监听 8080，崩溃时非零退出）
-# exec /path/to/your-server --port 8080 ...
-exec sleep infinity   # 占位：未配置前保持进程存活便于查看日志
-"""
+def launcher_delete(name):
+    """删除非激活 section 的 models.d/<name>.conf（激活/运行中的不可删）。"""
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", name):
+        return {"ok": False, "error": "非法 section 名: %s" % name}
+    conf = parse_ai_conf()
+    if name not in conf["sections"]:
+        return {"ok": False, "error": "section 不存在: %s" % name}
+    if name == conf["default"]:
+        return {"ok": False, "error": "不能删除当前激活的 section: %s（先切换到其他后端）" % name}
+    if name == running_section():
+        return {"ok": False, "error": "section %s 正在运行，请先停止服务" % name}
+    sf = _sec_file(name)
+    if not os.path.isfile(sf):
+        return {"ok": False, "error": "section %s 定义在主配置文件中（非 models.d/），请手工编辑 ai-server.conf 删除" % name}
     with _launcher_lock:
-        if os.path.exists(path):  # 双检，防并发
-            return {"ok": False, "error": "已存在: %s.sh" % name}
-        _atomic_write(path, skeleton, mode=0o755)
-    return {"ok": True, "name": name, "path": path}
+        try:
+            os.remove(sf)
+        except OSError as e:
+            return {"ok": False, "error": "删除失败: %s" % e}
+    return {"ok": True, "name": name}
 
 def proc_health(pid):
     """从 /proc 读进程 CPU 占用（0.5s 采样）、内存、运行时长。"""
@@ -1518,7 +1661,7 @@ def _spec_counters():
             "accepted": s.get("llamacpp:spec_decode_num_accepted_tokens_total", 0)}
 
 def test_generation(prompt, n_predict):
-    backend, _, _ = detect_service()
+    backend, pid, _ = detect_service()
     if backend == "ninfer":
         return _ninfer_test_generation(prompt, n_predict)
     try:
@@ -1529,8 +1672,14 @@ def test_generation(prompt, n_predict):
     before = _spec_counters()
     body = json.dumps({"prompt": prompt, "n_predict": n_predict,
                        "stream": False}).encode()
+    headers = {"Content-Type": "application/json"}
+    # llama.cpp 配置了 --api-key 时，/completion 需 Authorization: Bearer 头（否则 401）
+    if pid is not None:
+        key = _last_flag(_proc_cmdline(pid) or "", "--api-key")
+        if key:
+            headers["Authorization"] = "Bearer " + key.split(",")[0].strip()
     req = urllib.request.Request(llama_base() + "/completion", data=body,
-                                 headers={"Content-Type": "application/json"})
+                                 headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=300) as r:
             j = json.loads(r.read().decode())
@@ -1601,65 +1750,10 @@ def _ninfer_test_generation(prompt, n_predict):
             mtp = {"accept": last["accept_pct"], "tok_per_round": last.get("tok_per_round")}
     return {"ok": True, "content": content, "timing": timing, "mtp": mtp}
 
-# ---------------- 启动参数（systemd 单元 + 历史） ----------------
+# ---------------- 启动参数（ai-server.conf section + 历史） ----------------
 
-UNIT_FILE = "/etc/systemd/system/llama-server.service"
 HIST_FILE = os.path.join(BASE, "cmd_history.json")
 HIST_LEN = 20
-
-def _read_unit_cmd():
-    """从单元文件读 ExecStart（处理反斜杠续行）。"""
-    try:
-        with open(UNIT_FILE) as f:
-            text = f.read()
-    except Exception:
-        return None
-    parts, in_exec = [], False
-    for line in text.splitlines():
-        s = line.strip()
-        if s.startswith("ExecStart="):
-            in_exec = True
-            s = s[len("ExecStart="):]
-        if in_exec:
-            if s.endswith("\\"):
-                parts.append(s[:-1])
-            else:
-                parts.append(s)
-                in_exec = False
-    if not parts:
-        return None
-    raw = " ".join(p.strip() for p in parts if p.strip())
-    return " ".join(raw.split())  # 归一化空白，保证"未修改"判断可靠
-
-def _write_unit_cmd(cmd):
-    try:
-        with open(UNIT_FILE) as f:
-            lines = f.read().splitlines()
-    except Exception:
-        return "无法读取单元文件"
-    out, i, n = [], 0, len(lines)
-    while i < n:
-        s = lines[i].strip()
-        if s.startswith("ExecStart="):
-            out.append("ExecStart=" + cmd)
-            i += 1
-            if s.endswith("\\"):
-                while i < n and lines[i].strip().endswith("\\"):
-                    i += 1
-                if i < n:
-                    i += 1  # 旧块最后一行（无尾反斜杠）
-            continue
-        out.append(lines[i])
-        i += 1
-    tmp = UNIT_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        f.write("\n".join(out) + "\n")
-    os.chmod(tmp, 0o600)  # 单元文件含 --api-key，不给同机其他用户读
-    os.replace(tmp, UNIT_FILE)
-    r = subprocess.run(["systemctl", "daemon-reload"], capture_output=True, text=True, timeout=10)
-    if r.returncode != 0:
-        return r.stderr.strip() or "daemon-reload 失败"
-    return None
 
 def _load_hist():
     try:
@@ -1719,11 +1813,9 @@ BOOL_FIELDS = [("--metrics", "metrics"), ("--no-host", "no_host"),
                ("--context-shift", "context_shift"),
                ("--no-webui", "no_webui")]
 
-# ---------------- NInfer launcher 参数（编辑 launcher 脚本） ----------------
-# NInfer 后端由 /etc/ai-server.conf 的 LAUNCHER 选择 /mnt/models/ai-launchers/<name>.sh；
-# 管理页编辑的就是该 wrapper 脚本（保留 preamble/exec 主程序，只重建参数段）。
-LAUNCHER_CONF = "/etc/ai-server.conf"
-LAUNCHER_DIR = "/mnt/models/ai-launchers"
+# ---------------- NInfer 启动参数（conf section 字段） ----------------
+# NInfer 后端的配置按 section 存于 /etc/cortex-console/models.d/<name>.conf
+# （server-type/execute/model/model_flag/cmdline），管理页 NInfer 表单编辑的就是这些字段。
 
 # 一级字段（顺序即脚本重建时的参数顺序）
 NINFER_NUM = [  # 数字 / 自由值
@@ -1764,28 +1856,6 @@ _NINFER_VALUE_FLAGS = {p for p, _ in NINFER_VALUE_FIELDS} | {
     "--response-store-max-mib",
 }
 _NINFER_BOOL_FLAGS = {p for p, _ in NINFER_CHK}
-
-
-def ninfer_launcher_name():
-    """读 /etc/ai-server.conf 的 LAUNCHER（当前激活 launcher 名）。"""
-    try:
-        with open(LAUNCHER_CONF) as f:
-            for line in f:
-                s = line.strip()
-                if s.startswith("LAUNCHER="):
-                    return s.split("=", 1)[1].strip() or None
-    except Exception:
-        return None
-    return None
-
-
-def ninfer_launcher_file():
-    """返回 (launcher 名, wrapper 脚本路径)；路径不存在时路径为 None。"""
-    name = ninfer_launcher_name()
-    if not name:
-        return None, None
-    path = os.path.join(LAUNCHER_DIR, name + ".sh")
-    return name, (path if os.path.isfile(path) else None)
 
 
 _NINFER_FIELD_MAP = {p: k for p, k in NINFER_VALUE_FIELDS + NINFER_CHK}
@@ -1867,6 +1937,17 @@ def parse_ninfer_cmdline(cmd):
     return out
 
 
+def _ninfer_from_section(sec):
+    """conf section → ninfer 字段 dict（与 parse_ninfer_script 输出同构）。
+    binary=execute、model=model、model_form 由 model_flag 推导，cmdline 拆成字段。"""
+    out = _ninfer_empty()
+    out["binary"] = sec.get("execute", "")
+    out["model"] = sec.get("model", "")
+    out["model_form"] = "kv" if (sec.get("model_flag", "") or "").endswith("=") else "positional"
+    _ninfer_parse_args(shlex.split(sec.get("cmdline", "")), out)
+    return out
+
+
 def _ninfer_build_parts(parsed):
     model_arg = ("model=" if parsed.get("model_form") == "kv" else "") + parsed.get("model", "")
     parts = ["exec", parsed.get("binary", ""), model_arg]
@@ -1923,22 +2004,27 @@ def ninfer_build_script(parsed):
     return pre + body + "\n"
 
 
-def ninfer_save(fields, restart=False):
-    """按表单字段重建 launcher wrapper 脚本并写盘，可选重启 ai-server。"""
-    name, path = ninfer_launcher_file()
-    if not path:
-        return {"ok": False, "error": "未找到当前 NInfer launcher 脚本（/etc/ai-server.conf 的 LAUNCHER）"}
-    if "llama" in (name or ""):
-        return {"ok": False, "error": "当前 LAUNCHER 不是 NInfer"}
-    cur = parse_ninfer_script(path)
-    if cur is None:
-        return {"ok": False, "error": "无法解析 launcher 脚本，请手动检查"}
+def ninfer_save(fields, restart=False, section=None):
+    """按表单字段更新指定 section（缺省 = default 激活的）的 model/cmdline，可选重启。"""
+    if section:
+        name = section
+        sec = parse_ai_conf()["sections"].get(name)
+        if not sec:
+            return {"ok": False, "error": "section 不存在: %s" % name}
+    else:
+        name, sec = _active_section()
+    if not sec:
+        return {"ok": False, "error": "配置中没有激活的 section（default 无效）"}
+    if _sec_backend(sec) != "ninfer":
+        return {"ok": False, "error": "当前 section 不是 NInfer 后端，无法用 NInfer 表单编辑"}
+    cur = _ninfer_from_section(sec)
     new = dict(cur)
     for flag, key in NINFER_VALUE_FIELDS:
         new[key] = (fields.get(key) or "").strip()
     for flag, key in NINFER_CHK:
         new[key] = bool(fields.get(key))
     new["model"] = (fields.get("model") or cur["model"]).strip()
+    new["binary"] = (fields.get("binary") or cur["binary"]).strip()
     new["custom"] = (fields.get("custom") or "").strip()
     # 无 --spec 时不应残留投机解码参数
     if not new.get("spec"):
@@ -1989,30 +2075,35 @@ def ninfer_save(fields, restart=False):
     if not os.path.isfile(new["model"]):
         return {"ok": False, "error": "model 文件不存在: " + new["model"]}
     # 字段级比较：无实际改动则不写盘（避免无谓重建/重排）
-    edit_keys = [k for _, k in NINFER_VALUE_FIELDS + NINFER_CHK] + ["model", "custom"]
+    edit_keys = [k for _, k in NINFER_VALUE_FIELDS + NINFER_CHK] + ["model", "binary", "custom"]
     if all(new.get(k) == cur.get(k) for k in edit_keys):
         return {"ok": True, "changed": False, "error": None, "state": None}
-    try:
-        with open(path) as f:
-            old_text = f.read()
-    except Exception as e:
-        return {"ok": False, "error": "读取脚本失败: %s" % e}
-    new_text = ninfer_build_script(new)
-    if new_text == old_text:
-        return {"ok": True, "changed": False, "error": None, "state": None}
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(new_text)
-    os.chmod(tmp, 0o755)
-    os.replace(tmp, path)
+    parts = _ninfer_build_parts(new)
+    # 写各自的 models.d/<name>.conf（server-type/env 从当前 section 保留）
+    updates = {
+        "server-type": (sec.get("server-type") or "").strip(),
+        "execute": new["binary"],
+        "model": new["model"],
+        "model_flag": "model=" if new.get("model_form") == "kv" else "",
+        "env": (sec.get("env") or "").strip(),
+        "cmdline": " ".join(parts[3:]),
+    }
+    with _launcher_lock:
+        try:
+            _write_sec_file(name, updates)
+        except OSError as e:
+            return {"ok": False, "error": "写入 %s 失败: %s" % (_sec_file(name), e)}
     info = None
     if restart:
-        r = subprocess.run(["systemctl", "restart", "ai-server"],
-                           capture_output=True, text=True, timeout=180)
-        time.sleep(1)
-        info = service_info()
-        if r.returncode != 0:
-            return {"ok": False, "error": r.stderr.strip() or "重启失败", "state": info}
+        try:
+            r = subprocess.run(["systemctl", "restart", _ctrl_unit()],
+                               capture_output=True, text=True, timeout=180)
+            time.sleep(1)
+            info = service_info()
+            if r.returncode != 0:
+                return {"ok": False, "error": r.stderr.strip() or "重启失败", "state": info}
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "重启超时（180s），配置已保存，请手动检查: systemctl status ai-server"}
     return {"ok": True, "changed": True, "error": None, "state": info}
 
 
@@ -2097,18 +2188,27 @@ def diff_brief(cmd, cur):
         parts.append(pn["custom"])
     return " · ".join(parts)
 
-def cmd_info():
-    backend, pid, _ = detect_service()
+def cmd_info(name=None):
+    """name 指定时读该 section（管理页启动参数 tab 下拉选择用）；
+    缺省读 default 激活的 section。"""
+    if name:
+        sec = parse_ai_conf()["sections"].get(name)
+        if not sec:
+            return {"error": "section 不存在: %s" % name}
+    else:
+        name, sec = _active_section()
+    backend = _sec_backend(sec)
+    default_name = _active_section()[0]
     if backend == "ninfer":
-        name, path = ninfer_launcher_file()
-        base = parse_ninfer_script(path) if path else _ninfer_empty()
-        if base is None:
-            base = _ninfer_empty()
-        cmd = _proc_cmdline(pid)
-        source = "file"
+        base = _ninfer_from_section(sec) if sec else _ninfer_empty()
+        run_backend, pid, _ = detect_service()
+        # 只有选中的是激活 section 时，进程参数才属于它；否则只读 conf
+        cmd = ""
+        if name == default_name:
+            cmd = _proc_cmdline(pid) if run_backend == "ninfer" else ""
+        source = "conf"
         if cmd:
-            # 服务运行中：用进程实际生效的参数值填充（launcher 默认值已展开），
-            # 但 binary/model/model_form/preamble 仍取 wrapper（写回时用）。
+            # 服务运行中：用进程实际生效的参数值填充（conf 未含的运行时默认值）
             eff = parse_ninfer_cmdline(cmd)
             for flag, key in NINFER_VALUE_FIELDS:
                 if eff.get(key):
@@ -2119,21 +2219,21 @@ def cmd_info():
         parsed = {k: base[k] for k in
                   [k for _, k in NINFER_VALUE_FIELDS] + [k for _, k in NINFER_CHK]
                   + ["model", "binary", "model_form", "custom"]}
-        return {"backend": "ninfer",
-                "ninfer": {"launcher": name, "file": path, "source": source, "parsed": parsed},
-                "current": cmd or "（服务未运行；启动后此处显示实际启动命令）",
+        return {"backend": "ninfer", "default": default_name,
+                "ninfer": {"launcher": name, "file": AI_SERVER_CONF, "source": source, "parsed": parsed},
+                "current": cmd or _sec_to_cmdline_str(sec) or "（服务未运行；启动后此处显示实际启动命令）",
                 "parsed": None, "history": []}
-    cur = _read_unit_cmd()
+    # llama / 未知后端：用 section 渲染的完整命令
+    cur = _sec_to_cmdline_str(sec) if sec else ""
     h = _load_hist()
     if cur and (not h or h[0].get("cmd") != cur):
-        # 当前命令不在历史顶部时置顶显示（不落盘）
         h = [{"ts": time.time(), "cmd": cur}] + [x for x in h if x.get("cmd") != cur]
     h = h[:HIST_LEN]
     for x in h:
         if not x.get("name"):
             x["name"] = auto_name(x.get("cmd", ""))
         x["diff"] = "" if x.get("cmd") == cur else diff_brief(x.get("cmd", ""), cur)
-    return {"current": cur,
+    return {"backend": "llama", "default": default_name, "current": cur,
             "parsed": parse_cmd(cur) if cur else None,
             "history": h}
 
@@ -2162,9 +2262,14 @@ def hist_delete(cmd):
             return {"ok": True, "history": cmd_info()["history"]}
     return {"ok": False, "error": "未找到该历史记录"}
 
-def cmd_diff(cmd):
-    """对比当前命令与给定命令，返回逐字段差异（选择历史命令时展示用）。"""
-    cur = _read_unit_cmd()
+def cmd_diff(cmd, section=None):
+    """对比当前命令与给定命令，返回逐字段差异（选择历史命令时展示用）。
+    section 指定时以该 section 为基线，缺省用 default 激活的 section。"""
+    if section:
+        sec = parse_ai_conf()["sections"].get(section) or {}
+    else:
+        _, sec = _active_section()
+    cur = _sec_cmdline(sec) or ""
     pc = parse_cmd(cur) if cur else parse_cmd("")
     pn = parse_cmd(cmd) if cmd else parse_cmd("")
     diffs = []
@@ -2250,38 +2355,62 @@ def _check_cmd_files(cmd):
             return name + " 不存在: " + path
     return None
 
-def cmd_save(new_cmd, restart=False):
-    if detect_service()[0] == "ninfer":
+def cmd_save(new_cmd, restart=False, section=None):
+    if section:
+        name = section
+        sec = parse_ai_conf()["sections"].get(name)
+        if not sec:
+            return {"ok": False, "error": "section 不存在: %s" % name}
+    else:
+        name, sec = _active_section()
+    if _sec_backend(sec) == "ninfer":
         return {"ok": False,
-                "error": "NInfer 后端的启动参数由 /mnt/models/ai-launchers/ninfer-v100-duo.sh 管理，不可在管理页编辑"}
+                "error": "NInfer 后端的启动参数请用上方 NInfer 表单编辑（或 AI Server 配置卡片）"}
+    if not name:
+        return {"ok": False, "error": "配置中没有激活的 section（default 无效）"}
     new_cmd = " ".join(new_cmd.split())
-    if not new_cmd or "llama-server" not in new_cmd:
-        return {"ok": False, "error": "命令为空或不含 llama-server"}
-    # 单引号是 systemd ExecStart 唯一的引用字符：整体校验引用必须成对闭合，
-    # 值内裸单引号会破坏引用结构、可注入额外参数
-    if " ".join(re.findall(r"'[^']*'|[^'\s]+", new_cmd)) != new_cmd:
-        return {"ok": False, "error": "命令含非法引号（只允许整个值用单引号包裹）"}
+    if not new_cmd:
+        return {"ok": False, "error": "命令为空"}
+    try:
+        shlex.split(new_cmd)  # 引号不闭合会抛 ValueError
+    except ValueError as e:
+        return {"ok": False, "error": "命令引号不合法: %s" % e}
     err = _check_cmd_files(new_cmd)
     if err:
         return {"ok": False, "error": err}
-    cur = _read_unit_cmd()
-    if cur == new_cmd:
+    new_sec = _cmdline_str_to_sec(new_cmd)
+    if not new_sec.get("execute"):
+        return {"ok": False, "error": "命令缺少主程序"}
+    keys = ("execute", "model", "model_flag", "cmdline")
+    cur_keys = {k: sec.get(k, "") for k in keys}
+    new_keys = {k: new_sec.get(k, "") for k in keys}
+    if cur_keys == new_keys:
         return {"ok": True, "changed": False, "error": None, "state": None}
-    err = _write_unit_cmd(new_cmd)
-    if err:
-        return {"ok": False, "error": err}
-    if cur:
+    # 写各自的 models.d/<name>.conf（server-type/env 从当前 section 保留）
+    new_sec_full = dict(new_sec)
+    new_sec_full["server-type"] = (sec.get("server-type") or "").strip()
+    new_sec_full["env"] = (sec.get("env") or "").strip()
+    with _launcher_lock:
+        try:
+            _write_sec_file(name, new_sec_full)
+        except OSError as e:
+            return {"ok": False, "error": "写入 %s 失败: %s" % (_sec_file(name), e)}
+    if cur_keys.get("execute"):
+        cur_cmd = _sec_to_cmdline_str(sec)
         h = _load_hist()
-        h = [{"ts": time.time(), "cmd": cur, "name": auto_name(cur)}] + [x for x in h if x.get("cmd") != cur]
+        h = [{"ts": time.time(), "cmd": cur_cmd, "name": auto_name(cur_cmd)}] + [x for x in h if x.get("cmd") != cur_cmd]
         _save_hist(h[:HIST_LEN])
     info = None
     if restart:
-        r = subprocess.run(["systemctl", "restart", "llama-server"],
-                           capture_output=True, text=True, timeout=180)
-        time.sleep(1)
-        info = service_info()
-        if r.returncode != 0:
-            return {"ok": False, "error": r.stderr.strip() or "重启失败", "state": info}
+        try:
+            r = subprocess.run(["systemctl", "restart", _ctrl_unit()],
+                               capture_output=True, text=True, timeout=180)
+            time.sleep(1)
+            info = service_info()
+            if r.returncode != 0:
+                return {"ok": False, "error": r.stderr.strip() or "重启失败", "state": info}
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "重启超时（180s），配置已保存，请手动检查: systemctl status ai-server"}
     return {"ok": True, "changed": True, "error": None, "state": info}
 
 # ---------------- HTTP ----------------
@@ -2315,7 +2444,12 @@ class Handler(BaseHTTPRequestHandler):
         return {k: v[0] for k, v in d.items()}
 
     def _admin_token(self):
-        tok = self.headers.get("X-Admin-Token") or self._query().get("token")
+        tok = self.headers.get("X-Admin-Token")
+        if not tok:
+            # query token 会进浏览器历史/代理日志/Referer，仅放行无法带 header 的
+            # 流式/下载端点；其余一律要求 X-Admin-Token 请求头
+            if self.path.split("?", 1)[0] in ("/api/admin/logs/stream", "/api/admin/logs/download"):
+                tok = self._query().get("token")
         if not tok:
             return False
         exp = _tokens.get(tok)
@@ -2410,13 +2544,13 @@ class Handler(BaseHTTPRequestHandler):
             if not self._admin_token():
                 self._json(401, {"error": "未登录"})
                 return
-            self._json(200, cmd_info())
+            self._json(200, cmd_info(self._query().get("section") or None))
             return
         if path == "/api/admin/cmd/diff":
             if not self._admin_token():
                 self._json(401, {"error": "未登录"})
                 return
-            self._json(200, cmd_diff(self._query().get("cmd", "")))
+            self._json(200, cmd_diff(self._query().get("cmd", ""), self._query().get("section")))
             return
         if path == "/api/admin/files":
             if not self._admin_token():
@@ -2490,7 +2624,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "请求格式错误"})
             return
         if path == "/api/admin/login":
-            tok, err = admin_login(data.get("password", ""))
+            tok, err = admin_login(data.get("password", ""), self.client_address[0])
             if err:
                 self._json(403, {"error": err})
             else:
@@ -2506,21 +2640,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/admin/launcher":
                 self._json(200, launcher_switch(str(data.get("launcher", ""))))
                 return
-            if path == "/api/admin/ai-conf":
-                self._json(200, ai_conf_save(data.get("conf"), data.get("script"),
-                                             bool(data.get("restart"))))
-                return
             if path == "/api/admin/ai-conf/new":
-                self._json(200, launcher_create(str(data.get("name", ""))))
+                self._json(200, launcher_create(str(data.get("name", "")), str(data.get("server_type", ""))))
+                return
+            if path == "/api/admin/ai-conf/delete":
+                self._json(200, launcher_delete(str(data.get("name", ""))))
                 return
             if path == "/api/admin/test":
                 self._json(200, test_generation(data.get("prompt", ""), data.get("n_predict", 64)))
                 return
             if path == "/api/admin/cmd":
-                self._json(200, cmd_save(data.get("cmd", ""), bool(data.get("restart"))))
+                self._json(200, cmd_save(data.get("cmd", ""), bool(data.get("restart")), str(data.get("section") or "")))
                 return
             if path == "/api/admin/ninfer":
-                self._json(200, ninfer_save(data.get("fields", {}) or {}, bool(data.get("restart"))))
+                self._json(200, ninfer_save(data.get("fields", {}) or {}, bool(data.get("restart")), str(data.get("section") or "")))
                 return
             if path == "/api/admin/cmd/hist/rename":
                 self._json(200, hist_rename(data.get("cmd", ""), data.get("name", "")))

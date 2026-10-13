@@ -1,5 +1,5 @@
 [Unit]
-Description=AI Server (configurable launcher, see /etc/ai-server.conf)
+Description=AI Server (section-based config, see /etc/cortex-console/ai-server.conf)
 After=network-online.target
 Wants=network-online.target
 
@@ -8,7 +8,7 @@ Type=simple
 User=root
 WorkingDirectory=__WORK_DIR__
 ExecStartPre=/bin/bash -c 'command -v nvidia-smi >/dev/null && nvidia-smi -pl 250 || true'
-ExecStart=__LAUNCHERS_DIR__/dispatch.sh
+ExecStart=__DASH_DIR__/service/dispatch.sh
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65535

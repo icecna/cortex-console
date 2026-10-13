@@ -2,6 +2,7 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📟</text></svg>">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortex Console · 管理</title>
 <link rel="stylesheet" href="/style.css">
@@ -45,15 +46,6 @@
       </div>
       <div class="tabpanel" id="tab_svc">
       <section class="section">
-        <h2><span class="sico">🔀</span>后端切换</h2>
-        <div class="frow">
-          <select class="inp grow sel" id="launcher_sel"></select>
-          <button class="btn primary" id="btn_launcher">切换并重启</button>
-        </div>
-        <div class="fhint" id="launcher_desc"></div>
-        <div class="msg" id="launcher_msg"></div>
-      </section>
-      <section class="section">
         <h2><span class="sico">🛠️</span>服务控制</h2>
         <div class="defs">
           <div class="def"><span class="k">状态</span><span class="v big" id="svc_state">—</span></div>
@@ -67,10 +59,14 @@
           <div class="def"><span class="k">API 响应</span><span class="v" id="h_api">—</span></div>
         </div>
         <div class="btnrow">
+          <select class="inp sel" id="launcher_sel" title="当前激活的后端（default 指向的 section）"></select>
+          <button class="btn primary" id="btn_launcher">切换并重启</button>
+          <span style="flex:1"></span>
           <button class="btn primary" id="btn_start">启动</button>
           <button class="btn" id="btn_restart">重启</button>
           <button class="btn danger" id="btn_stop">停止</button>
         </div>
+        <div class="fhint" id="launcher_desc"></div>
         <div class="msg" id="svc_msg"></div>
       </section>
       <section class="section">
@@ -86,30 +82,33 @@
       </div>
       <div class="tabpanel active" id="tab_params">
       <section class="section">
-        <h2><span class="sico">📄</span>ai-server 配置</h2>
+        <div class="h2row">
+          <h2><span class="sico">📝</span>编辑配置</h2>
+          <select class="inp sel" id="param_sel" title="选择要编辑的 section（下方表单随之加载；激活的是 default 指向的）"></select>
+          <button class="btn sm ghost" id="btn_aic_del" title="删除上方下拉框中选中的模型（激活/运行中的不可删）">🗑 删除</button>
+        </div>
         <div class="frow">
-          <label class="flab" title="新建 launcher 脚本（骨架），之后在下方编辑">新建 launcher</label>
-          <input class="inp grow" id="aic_newname" placeholder="名字，如 my-backend" spellcheck="false">
+          <label class="flab" title="新建一个模型配置（骨架），不影响当前服务；创建后在下拉框选中它填参数，再用「服务控制 → 后端切换」激活">新建模型</label>
+          <input class="inp grow" id="aic_newname" placeholder="名字，如 my-model" spellcheck="false">
+          <select class="inp sel" id="aic_newtype" title="推理框架（server-type）">
+            <option value="ninfer">ninfer</option>
+            <option value="llama.cpp">llama.cpp</option>
+          </select>
           <button class="btn" id="btn_aic_new">创建</button>
         </div>
-        <label class="flab" style="display:block; margin-top:8px" title="/etc/ai-server.conf 全文，未注释的 LAUNCHER 行必须恰好一行">/etc/ai-server.conf</label>
-        <textarea class="ta" id="aic_conf" rows="12" spellcheck="false" placeholder="（conf 不存在）"></textarea>
-        <label class="flab" style="display:block; margin-top:8px" title="当前 LAUNCHER 对应的启动脚本">启动脚本 <span class="sub" id="aic_script_path">—</span></label>
-        <textarea class="ta" id="aic_script" rows="16" spellcheck="false" placeholder="（当前 LAUNCHER 无对应脚本）"></textarea>
-        <div class="btnrow" style="margin-top:8px">
-          <button class="btn primary" id="btn_aic_save">保存</button>
-          <button class="btn primary" id="btn_aic_save_restart">保存并重启</button>
-          <button class="btn" id="btn_aic_reload">刷新</button>
-        </div>
+        <div class="fhint" id="param_hint"></div>
         <div class="msg" id="aic_msg"></div>
       </section>
       <div id="ninfer_area" style="display:none">
       <section class="section">
-        <h2><span class="sico">⚙️</span>NInfer 启动参数</h2>
         <div class="fhint" id="n_file_msg"></div>
         <div class="nscroll">
         <div class="fgroup">
           <h3>模型与端点</h3>
+          <div class="frow">
+            <label class="flab" title="推理服务可执行文件（section 的 execute）">主程序</label>
+            <input class="inp grow" id="n_binary" spellcheck="false" placeholder="/path/to/ninfer-serve">
+          </div>
           <div class="frow">
             <label class="flab" title="模型工件路径（.ninfer）">model 模型</label>
             <input class="inp grow" id="n_model" readonly title="点击右侧按钮选择">
@@ -551,7 +550,7 @@ function showMain() {
   $("admin_main").style.display = "";
   refreshService();
   refreshHealth();
-  loadCmd();
+  loadParamSel();
   loadTail();
   openStream();
   refreshErrors();
@@ -610,6 +609,38 @@ $("btn_start").onclick = () => doAction("start", "启动");
 $("btn_restart").onclick = () => doAction("restart", "重启");
 $("btn_stop").onclick = () => doAction("stop", "停止");
 
+/* ---------- 启动参数 tab：section 选择 ---------- */
+async function loadParamSel(prefer = null) {
+  if (!token) return;
+  const sel = $("param_sel");
+  if (!sel) return;
+  try {
+    const [j, c] = await Promise.all([
+      api("/api/admin/launcher"), api("/api/admin/cmd")
+    ]);
+    // prefer（如刚创建的 section）> 之前选中的 > 运行中的 > default
+    const prev = prefer || sel.value;
+    sel.innerHTML = "";
+    for (const o of j.options || []) {
+      const op = document.createElement("option");
+      op.value = o.name;
+      op.textContent = o.name
+        + (o.current ? "（default）" : "")
+        + (o.running ? "（运行中）" : "");
+      sel.appendChild(op);
+    }
+    // 默认选中运行中的 section；之前选过的保持选中
+    sel.value = (prev && [...sel.options].some(o => o.value === prev)) ? prev
+      : ((j.running && [...sel.options].some(o => o.value === j.running)) ? j.running
+      : (c.default || (j.current || "")));
+    loadCmd();
+  } catch (e) {
+    const h = $("param_hint");
+    if (h) h.textContent = "加载 section 列表失败: " + (e && e.message || e);
+  }
+}
+$("param_sel").addEventListener("change", loadCmd);
+
 /* ---------- 后端切换 ---------- */
 let launcherCur = "";
 let launcherBusy = false;
@@ -623,18 +654,23 @@ async function refreshLauncher() {
     for (const o of j.options) {
       const op = document.createElement("option");
       op.value = o.name;
-      op.textContent = o.name + (o.current ? "（当前）" : "");
+      op.textContent = o.name
+        + (o.current ? "（default）" : "")
+        + (o.running ? "（运行中）" : "");
       sel.appendChild(op);
     }
     sel.value = launcherCur;
-    const cur = j.options.find(o => o.current);
-    $("launcher_desc").textContent = cur ? cur.desc : (launcherCur ? "" : "（未设置 LAUNCHER）");
+    const run = j.running;
+    if (!launcherCur) $("launcher_desc").textContent = "（未设置 default）";
+    else if (run && run !== launcherCur)
+      $("launcher_desc").textContent = "⚠️ 配置 default 是 [" + launcherCur + "]，但实际运行的是 [" + run + "]（上次切换/重启未生效），重启后会切到 [" + launcherCur + "]";
+    else $("launcher_desc").textContent = run ? ("当前运行: [" + run + "]") : "（服务未运行）";
   } catch (e) {}
 }
 $("btn_launcher").onclick = async () => {
   const name = $("launcher_sel").value;
   if (!name || launcherBusy) return;
-  const msg = $("launcher_msg");
+  const msg = $("aic_msg");
   if (name === launcherCur) { msg.textContent = "已是当前后端，无需切换"; msg.className = "msg"; return; }
   if (!confirm("切换到后端 " + name + " 并重启服务？\n切换期间服务中断（约 1-2 分钟）。")) return;
   launcherBusy = true;
@@ -648,8 +684,7 @@ $("btn_launcher").onclick = async () => {
     msg.textContent = "已切换，等待服务启动…";
     msg.className = "msg ok";
     refreshLauncher();
-    loadCmd();  // 后端变了，启动参数表单重新拉取（此时服务未起，读的是新 launcher 脚本）
-    loadAiConf();  // conf/脚本卡片同步刷新
+    loadParamSel();  // 后端变了：下拉框同步到新激活 section，表单重新拉取
     let ready = false;
     for (let i = 0; i < 36; i++) {          // 最多轮询 3 分钟，等模型加载完
       await new Promise(r => setTimeout(r, 5000));
@@ -667,7 +702,7 @@ $("btn_launcher").onclick = async () => {
       msg.className = "msg bad";
     }
     refreshLauncher();
-    loadCmd();  // 服务就绪后再用进程实际参数刷新一次
+    loadParamSel();  // 服务就绪后再用进程实际参数刷新一次
   } catch (e) {
     msg.textContent = e.message;
     msg.className = "msg bad";
@@ -677,65 +712,44 @@ $("btn_launcher").onclick = async () => {
   };
 };
 
-/* ---------- ai-server 配置（conf + 启动脚本） ---------- */
+/* ---------- 新建 section ---------- */
 let aicBusy = false;
-async function loadAiConf() {
-  if (!token) return;
-  try {
-    const j = await api("/api/admin/ai-conf");
-    $("aic_conf").value = j.conf || "";
-    $("aic_script").value = j.script || "";
-    $("aic_script_path").textContent = j.script_path || (j.current ? "（脚本不存在）" : "（未设置 LAUNCHER）");
-  } catch (e) {}
-}
-async function saveAiConf(restart) {
-  if (aicBusy) return;
-  if (restart && !confirm("保存后将重启 ai-server，确定继续？")) return;
-  aicBusy = true;
-  const msg = $("aic_msg");
-  msg.textContent = (restart ? "保存并重启…" : "保存中…");
-  msg.className = "msg";
-  try {
-    const j = await api("/api/admin/ai-conf", {
-      conf: $("aic_conf").value, script: $("aic_script").value, restart
-    });
-    if (!j.ok) { msg.textContent = j.error || "保存失败"; msg.className = "msg bad"; return; }
-    msg.textContent = "已保存: " + (j.saved || []).join(", ") + (restart ? "，等待服务启动…" : "");
-    msg.className = "msg ok";
-    loadAiConf();
-    refreshLauncher();
-    loadCmd();
-    if (restart) {
-      for (let i = 0; i < 36; i++) {   // 最多等 3 分钟
-        await new Promise(r => setTimeout(r, 5000));
-        refreshService();
-        try {
-          const s = await api("/api/admin/service");
-          if (s.active === "active") { msg.textContent = "已保存并重启，服务就绪"; break; }
-        } catch (e) {}
-      }
-    }
-  } catch (e) { msg.textContent = e.message; msg.className = "msg bad"; }
-  aicBusy = false;
-}
-$("btn_aic_save").onclick = () => saveAiConf(false);
-$("btn_aic_save_restart").onclick = () => saveAiConf(true);
-$("btn_aic_reload").onclick = loadAiConf;
 $("btn_aic_new").onclick = async () => {
   const name = $("aic_newname").value.trim();
   if (!name || aicBusy) return;
   const msg = $("aic_msg");
+  aicBusy = true;
+  msg.textContent = "创建中…";
+  msg.className = "msg";
   try {
-    const j = await api("/api/admin/ai-conf/new", { name });
+    const j = await api("/api/admin/ai-conf/new", { name, server_type: $("aic_newtype").value });
     if (!j.ok) { msg.textContent = j.error || "创建失败"; msg.className = "msg bad"; return; }
-    msg.textContent = "已创建 " + name + ".sh（骨架），请在 conf 中设置 LAUNCHER=" + name + " 后保存，再编辑脚本内容";
+    msg.textContent = "已创建 section [" + name + "]（不影响当前服务）。下方表单已绑定，填好参数「保存」，再用「服务控制 → 后端切换」激活";
     msg.className = "msg ok";
     $("aic_newname").value = "";
-    const conf = $("aic_conf").value;
-    const lines = conf.split("\n").map(l => l.startsWith("LAUNCHER=") ? "#" + l : l);
-    lines.push("LAUNCHER=" + name);
-    $("aic_conf").value = lines.join("\n");
+    await refreshLauncher();
+    loadParamSel(name);  // 下拉框选中刚创建的 section，启动参数表单重新绑定
   } catch (e) { msg.textContent = e.message; msg.className = "msg bad"; }
+  aicBusy = false;
+};
+
+$("btn_aic_del").onclick = async () => {
+  const name = $("param_sel").value;
+  const msg = $("aic_msg");
+  if (!name || aicBusy) return;
+  if (!confirm("确认删除模型 [" + name + "]？其配置文件将删除且不可恢复")) return;
+  aicBusy = true;
+  msg.textContent = "删除中…";
+  msg.className = "msg";
+  try {
+    const j = await api("/api/admin/ai-conf/delete", { name });
+    if (!j.ok) { msg.textContent = j.error || "删除失败"; msg.className = "msg bad"; return; }
+    msg.textContent = "已删除模型 [" + name + "]";
+    msg.className = "msg ok";
+    await refreshLauncher();
+    loadParamSel();
+  } catch (e) { msg.textContent = e.message; msg.className = "msg bad"; }
+  aicBusy = false;
 };
 
 /* ---------- 服务健康 ---------- */
@@ -817,6 +831,7 @@ function ninferFields() {
   for (const [id, flag] of N_NUM.concat(N_SEL).concat(N_TXT)) f[N_KEY(flag)] = $(id).value.trim();
   for (const [id, flag] of N_CHK) f[N_KEY(flag)] = $(id).checked;
   f.model = $("n_model").value.trim();
+  f.binary = $("n_binary").value.trim();
   f.custom = $("n_custom").value.trim();
   return f;
 }
@@ -824,6 +839,7 @@ function fillNinfer(p) {
   for (const [id, flag] of N_NUM.concat(N_SEL).concat(N_TXT)) $(id).value = p[N_KEY(flag)] || "";
   for (const [id, flag] of N_CHK) $(id).checked = !!p[N_KEY(flag)];
   $("n_model").value = p.model || "";
+  $("n_binary").value = p.binary || "";
   $("n_custom").value = p.custom || "";
   updateNinferUI();
 }
@@ -889,11 +905,11 @@ function updateNinferUI() {
 }
 async function saveNinfer(restart) {
   const label = restart ? "保存并重启" : "保存";
-  if (restart && !confirm("保存后将重建 launcher 脚本并重启 ai-server，确定继续？")) return;
+  if (restart && !confirm("保存后将更新 conf 并重启 ai-server，确定继续？")) return;
   $("n_msg").textContent = label + "中…";
   $("n_msg").className = "msg";
   try {
-    const j = await api("/api/admin/ninfer", { fields: ninferFields(), restart });
+    const j = await api("/api/admin/ninfer", { fields: ninferFields(), restart, section: $("param_sel").value });
     if (!j.ok) { $("n_msg").textContent = j.error; $("n_msg").className = "msg bad"; return; }
     $("n_msg").textContent = j.changed ? label + "成功" : "配置未变化";
     $("n_msg").className = "msg ok";
@@ -902,7 +918,7 @@ async function saveNinfer(restart) {
   } catch (e) { $("n_msg").textContent = e.message; $("n_msg").className = "msg bad"; }
 }
 const N_INPUT_IDS = N_NUM.concat(N_SEL).concat(N_TXT).map(x => x[0])
-  .concat(N_CHK.map(x => x[0])).concat(["n_model", "n_custom"]);
+  .concat(N_CHK.map(x => x[0])).concat(["n_model", "n_binary", "n_custom"]);
 N_INPUT_IDS.forEach(id => $(id) && $(id).addEventListener("input", updateNinferUI));
 N_CHK.map(x => x[0]).forEach(id => $(id) && $(id).addEventListener("change", updateNinferUI));
 $("btn_n_save").onclick = () => saveNinfer(false);
@@ -1074,7 +1090,8 @@ function hideCmdDiff() { const b = $("cmd_diff"); if (b) b.style.display = "none
 async function showCmdDiff(cmd) {
   const box = $("cmd_diff");
   try {
-    const j = await api("/api/admin/cmd/diff?cmd=" + encodeURIComponent(cmd));
+    const sec = ($("param_sel") && $("param_sel").value) || "";
+    const j = await api("/api/admin/cmd/diff?cmd=" + encodeURIComponent(cmd) + (sec ? "&section=" + encodeURIComponent(sec) : ""));
     const diffs = j.diffs || [];
     const fmt = x => x === true ? "开" : (x === false ? "关" : (x || "—"));
     let html = '<div class="cmd-diff-title">' +
@@ -1167,13 +1184,24 @@ async function loadDevices() {
 
 async function loadCmd() {
   if (!token) return;
+  const sel = $("param_sel");
+  const section = (sel && sel.value) || "";
   let j;
-  try { j = await api("/api/admin/cmd"); } catch (e) { return; }
+  try { j = await api("/api/admin/cmd" + (section ? "?section=" + encodeURIComponent(section) : "")); } catch (e) { return; }
+  if (j.error) { $("param_hint").textContent = j.error; return; }
+  const active = section === (j.default || "");
+  if (sel) sel.value = section || (j.default || "");
+  $("param_hint").textContent = "";
+  // 非激活 section：保存并重启无意义（重启后跑的仍是 default），禁用
+  for (const id of ["btn_n_save_restart", "btn_cmd_save_restart"]) {
+    const b = $(id);
+    if (b) b.disabled = !active;
+  }
   if (j.backend === "ninfer") {
     $("cmd_edit_area").style.display = "none";
     $("ninfer_area").style.display = "";
     const nf = j.ninfer || {};
-    $("n_file_msg").textContent = "编辑 launcher：" + (nf.file || "（未找到脚本）") +
+    $("n_file_msg").textContent = "编辑 section：[" + (nf.launcher || "?") + "]" +
       (nf.source === "process" ? "　·　字段值来自运行进程实际配置" : "");
     const cur = j.current || "";
     if (cur && !cur.startsWith("（")) {
@@ -1225,7 +1253,7 @@ async function saveCmd(restart) {
   if (restart && !confirm("保存后将重启服务，确定继续？")) return;
   $("cmd_msg").textContent = label + "中…";
   try {
-    const j = await api("/api/admin/cmd", { cmd: buildCmd(), restart });
+    const j = await api("/api/admin/cmd", { cmd: buildCmd(), restart, section: $("param_sel").value });
     if (!j.ok) { $("cmd_msg").textContent = j.error; $("cmd_msg").className = "msg bad"; return; }
     $("cmd_msg").textContent = j.changed ? label + "成功" : "命令未变化";
     $("cmd_msg").className = "msg ok";
@@ -1551,7 +1579,7 @@ setInterval(refreshErrors, 15000);
 
 /* ---------- 初始化 ---------- */
 if (token) {
-  api("/api/admin/service").then(() => { showMain(); refreshLauncher(); loadAiConf(); }).catch(showLogin);
+  api("/api/admin/service").then(() => { showMain(); refreshLauncher(); }).catch(showLogin);
 } else {
   showLogin();
 }

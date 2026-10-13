@@ -151,6 +151,14 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 #admin_main .section > h2 .sico { font-size: 15px; }
 #admin_main .section > h2 .sub { margin-left: 2px; }
 
+/* 标题 + 提示同行 */
+.h2row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.h2row > h2 { margin-bottom: 0; flex: none; }
+.h2row > .fhint { margin-top: 0; flex: 1; min-width: 0; }
+.h2row > .inp.sel { margin-left: auto; width: 280px; flex: none; }
+.h2row > .btn { flex: none; }
+.btnrow > .inp.sel { width: 280px; flex: none; }
+
 /* 管理页 · 左列标签页 */
 .tabbar { display: flex; gap: 6px; position: sticky; top: 8px; z-index: 20; background: var(--bg); }
 .tab {
@@ -176,7 +184,7 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 .loginbox .inp { margin-bottom: 10px; }
 .loginbox .btn { width: 100%; }
 .inp { background: var(--bg); color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 7px 10px; font-size: 13px; width: 100%; }
+  border-radius: 6px; padding: 5px 10px; font-size: 13px; width: 100%; }
 .inp:focus { outline: none; border-color: var(--accent); }
 .inp.grow { flex: 1 1 0; min-width: 0; width: auto; }
 .inp.num { width: 72px; flex: none; }
@@ -197,6 +205,8 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 .btn.primary:hover { color: #fff; filter: brightness(1.12); }
 .btn.danger { color: var(--red); border-color: var(--red); }
 .btn.danger:hover { background: var(--red); color: #fff; }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--dim); }
+.btn.ghost:hover { border-color: var(--red); color: var(--red); background: transparent; }
 .btnrow { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
 .testrow { display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
 .msg { font-size: 13px; margin-top: 9px; min-height: 1em; }
@@ -218,12 +228,12 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
   font-weight: 700; margin: 16px 0 4px; line-height: 1.2;
   padding-left: 10px; border-left: 3px solid var(--accent); }
 .fgroup:first-of-type h3 { margin-top: 2px; }
-.frow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 7px; }
+.frow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .flab { font-size: 12px; color: var(--dim); flex: none; }
 .flab.block { display: block; margin-bottom: 2px; }
 .frow .inp.num { width: 84px; flex: none; }
 .chkrow .chk { margin-right: 14px; }
-.fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+.fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
 .fcell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .fcell .flab { flex: none; max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fcell .inp { flex: 1 1 0; min-width: 0; width: auto; }
@@ -233,7 +243,7 @@ canvas.chart { width: 100%; height: 48px; display: block; margin-top: 9px; }
 .logview::-webkit-scrollbar { width: 8px; }
 .logview::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .logview::-webkit-scrollbar-track { background: transparent; }
-.nscroll { padding-right: 6px; margin-top: 2px; }
+.nscroll { padding-right: 6px; margin-top: 0; }
 
 /* 文件选择弹窗 */
 .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); z-index: 100;

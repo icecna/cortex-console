@@ -1,0 +1,23 @@
+# /etc/cortex-console/ai-server.conf — Cortex Console 后端配置（主文件）
+#
+# 只放 default 行（当前激活的后端）；每个后端的完整配置单独放在
+# /etc/cortex-console/models.d/<name>.conf（cortex-console 管理页「启动参数 → 编辑配置」
+# 直接读写这些文件）。
+# /mnt/models/cortex-console/service/dispatch.sh 读取 default 指向的 section 并 exec。
+#
+# section 文件格式（INI 风格，值可用引号包裹，# 或 ; 开头为注释）：
+#   [<name>]
+#   server-type = "ninfer"            # 必填：推理框架（ninfer / llama.cpp）
+#   execute = "推理服务可执行文件"     # 必填，绝对路径
+#   model   = "模型路径"               # 可选
+#   model_flag = "-m"                  # 可选：缺失=位置参数 / "-m"=标志 / "model="=键值融合
+#   env     = "K=V K2=V2"              # 可选：exec 前设置的环境变量（空格分隔）
+#   cmdline = "其余参数 ..."            # 可选，不含 model
+#
+# 修改后：管理页点「保存并重启」，或手动  systemctl restart ai-server
+# 查看日志：journalctl -u ai-server -f
+
+default = example-ninfer
+
+# 各后端配置：/etc/cortex-console/models.d/*.conf（自动加载，同名 section 以主文件为准）
+include /etc/cortex-console/models.d/*.conf
